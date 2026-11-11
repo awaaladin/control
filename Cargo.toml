@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rhcs-core", "crates/netscan", "crates/zte", "crates/rhcs-cli"]
+members = ["crates/rhcs-core", "crates/netscan", "crates/zte", "crates/rhcs-cli", "crates/rhcsd"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,7 +11,7 @@ license = "MIT"
 rhcs-core = { path = "crates/rhcs-core" }
 netscan = { path = "crates/netscan" }
 zte = { path = "crates/zte" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "process", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

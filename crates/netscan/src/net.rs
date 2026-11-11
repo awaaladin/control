@@ -82,6 +82,17 @@ pub fn local_ip() -> Result<Ipv4Addr> {
     }
 }
 
+/// The local address the OS would use to reach `dest`, i.e. our IP on the
+/// network that `dest` lives on. No packets are sent.
+pub fn local_ip_for(dest: Ipv4Addr) -> Result<Ipv4Addr> {
+    let sock = UdpSocket::bind("0.0.0.0:0")?;
+    sock.connect((dest, 9))?;
+    match sock.local_addr()?.ip() {
+        IpAddr::V4(v4) => Ok(v4),
+        IpAddr::V6(_) => bail!("only IPv4 is supported for now"),
+    }
+}
+
 pub fn detect() -> Result<NetInfo> {
     let local_ip = local_ip()?;
     let gateway = default_gateway();

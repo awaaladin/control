@@ -3,6 +3,8 @@
 //! Every device module (router, decoder, amplifier) speaks in terms of these
 //! types so the API and UI layers never need to know how a fact was obtained.
 
+pub mod env;
+
 use serde::{Serialize, Serializer};
 use std::fmt;
 use std::net::Ipv4Addr;

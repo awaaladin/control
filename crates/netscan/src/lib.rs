@@ -11,6 +11,7 @@ pub mod net;
 pub mod oui;
 pub mod ports;
 pub mod router;
+pub mod scan;
 pub mod ssdp;
 
 #[cfg(windows)]
