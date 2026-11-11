@@ -1,5 +1,9 @@
 # control
 
+**rhcs** stands for **Rust Home Hardware Control System**: tools for seeing, monitoring
+and eventually controlling the hardware in a home (router, phone, TV decoder,
+amplifier) from one place, written in Rust.
+
 `rhcs` is a command-line tool for looking at and monitoring a home network:
 it finds devices on the LAN, fingerprints what they run, and reads live LTE
 signal data from ZTE 4G routers through their own web API.
@@ -114,13 +118,15 @@ A change in either means the router handed over to another cell.
 
 ## Troubleshooting
 
-**Plugging in the router's Ethernet cable kills my internet.**
-Windows prefers wired connections. If the router has no SIM or data, all traffic goes
-to a dead link. Run this once as administrator to keep internet on Wi-Fi while still
-reaching the router over the cable:
+**Connecting to the router kills my internet.**
+Windows sends internet traffic through whichever connection it ranks highest. If the
+router has no data, that's a dead end. Mark the router connection as local-only (run
+once as administrator) and internet keeps flowing through your other connection,
+e.g. a phone over USB tethering, while the router stays reachable:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ethernet-lan-only.ps1
+powershell -ExecutionPolicy Bypass -File scripts\lan-only.ps1 -Interface WiFi      # router over Wi-Fi
+powershell -ExecutionPolicy Bypass -File scripts\lan-only.ps1 -Interface Ethernet  # router over cable
 # undo: add -Undo
 ```
 
@@ -181,6 +187,18 @@ checks when it's missing.
 - Android phone as a data source over ADB (LTE signal, hotspot clients, battery)
 - Combining multiple LTE links into one connection
 
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first:
+contributions are accepted under a short agreement that keeps dual licensing possible.
+
 ## License
 
-MIT
+rhcs is dual-licensed:
+
+- **Open source: [GNU AGPL-3.0](LICENSE).** Free to use, study, modify and share. If you
+  distribute a modified version, or let people use it over a network (for example as a
+  hosted service), you must publish your source code under the same license.
+- **Commercial license.** If you want to build rhcs into a closed-source product or
+  service without the AGPL's obligations, a commercial license is available. Open an
+  issue titled "Commercial license" or contact the maintainer through GitHub.

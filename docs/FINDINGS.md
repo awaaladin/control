@@ -39,7 +39,7 @@ Facts about the actual hardware, each tagged with how we know it.
 - OBSERVED: web UI module `network/net_select` can set the bearer preference (auto / LTE-only) and
   manually scan for and register on networks. No band-lock UI found yet
 - OBSERVED: the router reported `modem_sim_undetected` until a SIM was inserted
-- Windows: Ethernet metric set to 500 (scripts/ethernet-lan-only.ps1) so internet stays on Wi-Fi
+- Windows: Ethernet metric set to 500 (scripts/lan-only.ps1) so internet stays on Wi-Fi
 - Secrets (Wi-Fi key, IMEI, S/N, SIM number) are on the label: never commit them
 
 ## Decoder: Strong SRT 4940
