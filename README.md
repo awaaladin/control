@@ -71,12 +71,13 @@ cp .env.example .env
 
 ```ini
 ROUTER_IP=192.168.0.1
-ROUTER_ADMIN_PASSWORD=admin
+ROUTER_ADMIN_PASSWORD=your-router-password
 ROUTER_MODEL=ZTE MF293N
 ```
 
 `.env` is git-ignored. Keep it that way: it holds your router password, and
-cell/tower IDs can be used to estimate your location.
+cell/tower IDs can be used to estimate your location. If your router still uses
+the password printed on its label, change it in the router's web UI first.
 
 `rhcs` looks for `.env` in the current directory and next to the executable.
 

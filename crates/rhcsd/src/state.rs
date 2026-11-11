@@ -32,6 +32,8 @@ pub struct Config {
     pub router_password: Option<String>,
     pub router_model: String,
     pub phone_serial: Option<String>,
+    /// `ip:port` for ADB over Wi-Fi (e.g. the phone's hotspot address + 5555)
+    pub phone_adb_addr: Option<String>,
     pub adb_path: String,
     pub scan_cidrs: Vec<String>,
     pub scan_interval_s: u64,
@@ -72,6 +74,7 @@ impl Config {
             router_password: get("ROUTER_ADMIN_PASSWORD"),
             router_model: get("ROUTER_MODEL").unwrap_or_else(|| "ZTE router".into()),
             phone_serial: get("PHONE_ADB_SERIAL"),
+            phone_adb_addr: get("PHONE_ADB_ADDR"),
             adb_path,
             scan_cidrs: get("SCAN_CIDRS")
                 .map(|s| s.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect())
