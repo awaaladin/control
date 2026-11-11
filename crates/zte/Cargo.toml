@@ -1,0 +1,15 @@
+[package]
+name = "zte"
+description = "Client for ZTE MF-series LTE routers (MF293N, MF283U-based firmwares) over their stock JSON web API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+netscan.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

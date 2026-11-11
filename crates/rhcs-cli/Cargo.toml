@@ -1,0 +1,24 @@
+[package]
+name = "rhcs-cli"
+description = "rhcs: command-line front end for the Rust Home Hardware Control System"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rhcs"
+path = "src/main.rs"
+
+[dependencies]
+rhcs-core.workspace = true
+netscan.workspace = true
+zte.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }

@@ -1,0 +1,9 @@
+[package]
+name = "rhcs-core"
+description = "Shared device model for the Rust Home Hardware Control System"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
