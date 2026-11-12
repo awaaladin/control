@@ -54,9 +54,21 @@ Facts about the actual hardware, each tagged with how we know it.
   `lan_station_list` with hostname "host"
 - OBSERVED: from the laptop (same LAN, router client isolation `NoForwarding=0`) it answers no
   ARP, no ping, and has no open TCP port in 1-10000: it runs no network services
-- THEORY: the network menu shows "View List / SCAN / Firmware Update", so it is likely a
-  network *client* (UPnP/DLNA media browsing, firmware download). Plan: make rhcsd a DLNA
-  media server the decoder can find with SCAN, to play laptop media on the TV
+- ~~THEORY: it is a network media client~~ → disproved, see below
+- TESTED 2026-11-12 (decoder cabled straight to the laptop, `scripts/decoder-lab.ps1` as its
+  DHCP/DNS server, `scripts/capture-decoder.ps1` recording its packets with pktmon):
+  - DHCP: sends DISCOVER every 1-3 s while "DHCP Usage" is ON, hostname "host", requests only
+    options 1,3,6,15 (mask, router, DNS, domain). Accepts a lease and keeps it
+  - With an address it answers ARP but not ping; runs no services
+  - **SCAN, View List and Firmware Update send no packets at all**: no DNS, no UPnP/SSDP, no
+    connection attempts. "View List" only toggles DHCP. Firmware Update reports "no new
+    software" without touching the network (likely USB or over-the-air via satellite)
+  - With DHCP OFF the menu hides SCAN/Save, so a static address can't be used
+  - Conclusion: the Ethernet port provides no control or monitoring path. **Control = infrared only**
+- Lab gotchas (Windows): a directly cabled device makes an "Unidentified network" (Public
+  profile) where an old Block rule for PowerShell dropped its DHCP; fixed by setting that
+  network to Private. DHCP replies must be sent from a socket bound to the lab address, and
+  within ~2 s, or the client never hears them
 
 ## Phone: vivo Y03 (V2333 / V2332), Android 16, MediaTek MT6769, arm64-v8a
 - OBSERVED: no IR emitter (no `android.hardware.consumerir`), no magnetometer/compass

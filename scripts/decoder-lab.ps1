@@ -27,7 +27,11 @@ if (-not $OnlyMac) { throw "Set DECODER_MAC in .env or pass -OnlyMac; refusing t
 function Log([string]$kind, [string]$msg, [string]$color = "Gray") {
     $line = "{0} [{1}] {2}" -f (Get-Date -Format HH:mm:ss), $kind, $msg
     Write-Host $line -ForegroundColor $color
-    Add-Content -Path $logFile -Value $line -Encoding UTF8
+    # Another program (an editor, `tail`) may hold the log open; never let that stop the lab.
+    for ($try = 0; $try -lt 3; $try++) {
+        try { [IO.File]::AppendAllText($logFile, $line + "`r`n", [Text.Encoding]::UTF8); break }
+        catch { Start-Sleep -Milliseconds 50 }
+    }
 }
 
 $server = [System.Net.IPAddress]::Parse($ServerIp)
@@ -41,6 +45,14 @@ $dhcp.EnableBroadcast = $true
 # Bound to all addresses: Windows doesn't reliably deliver 0.0.0.0 -> 255.255.255.255
 # broadcasts (what a DHCP client without an address sends) to an address-bound socket.
 $dhcp.Client.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 67)))
+
+# Replies go out through a second socket pinned to the lab address: a broadcast
+# from an all-addresses socket leaves through Windows' default adapter (Wi-Fi),
+# not the cable, and the device never hears the offer.
+$dhcpOut = New-Object System.Net.Sockets.UdpClient
+$dhcpOut.Client.SetSocketOption("Socket", "ReuseAddress", $true)
+$dhcpOut.EnableBroadcast = $true
+$dhcpOut.Client.Bind((New-Object System.Net.IPEndPoint($server, 67)))
 
 $dns = New-Object System.Net.Sockets.UdpClient (New-Object System.Net.IPEndPoint($server, 53))
 
@@ -105,23 +117,24 @@ function Handle-Dhcp([byte[]]$p) {
     if ($opts.ContainsKey(60)) { $info += " | vendor class: " + [Text.Encoding]::ASCII.GetString($opts[60]) }
     if ($opts.ContainsKey(55)) { $info += " | asks for options: " + ($opts[55] -join ",") }
     if ($opts.ContainsKey(50)) { $info += " | wants IP: " + (([System.Net.IPAddress]::new($opts[50])).ToString()) }
-    Log "dhcp" $info "Green"
 
     $reply = switch ($type) { 1 { 2 } 3 { 5 } default { 0 } }
-    if ($reply -eq 0) { return }
     # Only ever answer the device we're studying, never other clients on other networks.
-    if ($OnlyMac -and $mac -ne $OnlyMac.ToLower()) {
-        Log "dhcp" "  ignored (not $OnlyMac)" "DarkGray"
-        return
+    $ours = -not $OnlyMac -or $mac -eq $OnlyMac.ToLower()
+    $sent = $false
+    if ($reply -ne 0 -and $ours) {
+        # Reply FIRST: DHCP clients wait only a few seconds for an answer, and
+        # logging to a slow drive must not make the offer late.
+        $bytes = New-DhcpReply $p ([byte]$reply)
+        $subnetBcast = [System.Net.IPAddress]::Parse($ServerIp.Substring(0, $ServerIp.LastIndexOf(".")) + ".255")
+        foreach ($target in @([System.Net.IPAddress]::Broadcast, $subnetBcast)) {
+            [void]$dhcpOut.Send($bytes, $bytes.Length, (New-Object System.Net.IPEndPoint($target, 68)))
+        }
+        $sent = $true
     }
-    $bytes = New-DhcpReply $p ([byte]$reply)
-    # Limited broadcast may leave through another adapter on Windows; the subnet
-    # broadcast can only leave through this one. DHCP clients accept either.
-    $subnetBcast = [System.Net.IPAddress]::Parse($ServerIp.Substring(0, $ServerIp.LastIndexOf(".")) + ".255")
-    foreach ($target in @([System.Net.IPAddress]::Broadcast, $subnetBcast)) {
-        [void]$dhcp.Send($bytes, $bytes.Length, (New-Object System.Net.IPEndPoint($target, 68)))
-    }
-    Log "dhcp" ("sent {0} -> {1}" -f $(if ($reply -eq 2) { "OFFER" } else { "ACK" }), $ClientIp)
+    Log "dhcp" $info "Green"
+    if ($reply -ne 0 -and -not $ours) { Log "dhcp" "  ignored (not $OnlyMac)" "DarkGray" }
+    if ($sent) { Log "dhcp" ("sent {0} -> {1}" -f $(if ($reply -eq 2) { "OFFER" } else { "ACK" }), $ClientIp) }
 }
 
 # ---- DNS -----------------------------------------------------------------
@@ -185,7 +198,9 @@ try {
         }
         if (((Get-Date) - $lastPing).TotalSeconds -ge 10) {
             $lastPing = Get-Date
-            $up = Test-Connection $ClientIp -Count 1 -Quiet -ErrorAction SilentlyContinue
+            # Short ping: Test-Connection blocks ~4 s on a silent host and would delay DHCP replies.
+            $up = $false
+            try { $up = ((New-Object System.Net.NetworkInformation.Ping).Send($ClientIp, 300)).Status -eq 'Success' } catch {}
             if ($up -ne $wasUp) {
                 Log "link" ("{0} {1}" -f $ClientIp, $(if ($up) { "answers ping" } else { "does not answer ping" })) $(if ($up) { "Green" } else { "DarkGray" })
                 $wasUp = $up
@@ -194,6 +209,6 @@ try {
         if ($idle) { Start-Sleep -Milliseconds 100 }
     }
 } finally {
-    $dhcp.Close(); $dns.Close(); $ssdp.Close()
+    $dhcp.Close(); $dhcpOut.Close(); $dns.Close(); $ssdp.Close()
     Log "lab" "stopped"
 }
