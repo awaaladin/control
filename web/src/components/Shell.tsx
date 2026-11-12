@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { fmtTime } from '../lib/format';
-import { enterDemo, goLive } from '../lib/rhcs';
+import { fmtAgo, fmtTime } from '../lib/format';
+import { goLive } from '../lib/rhcs';
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import { Icon } from './ui';
@@ -85,23 +85,19 @@ export function TopBar() {
   const baseUrl = useStore((s) => s.baseUrl);
   const sources = useStore((s) => s.sources);
   const telemetryAt = useStore((s) => s.telemetryAt);
-  const liveAvailable = useStore((s) => s.liveAvailable);
-  const setPrefs = useStore((s) => s.setPrefs);
   const now = useNow(1000);
   const stale = conn === 'live' && isStale(telemetryAt, STALE_MS.telemetry, now);
 
   const state =
-    conn === 'demo'
-      ? { label: 'DEMO', tone: 'demo' }
-      : conn === 'live'
-        ? stale
-          ? { label: 'LIVE · NO DATA', tone: 'stale' }
-          : { label: 'LIVE', tone: 'live' }
-        : conn === 'connecting'
-          ? { label: 'CONNECTING', tone: 'wait' }
-          : conn === 'offline'
-            ? { label: 'OFFLINE', tone: 'off' }
-            : { label: 'RECONNECTING', tone: 'wait' };
+    conn === 'live'
+      ? stale
+        ? { label: 'LIVE · NO DATA', tone: 'stale' }
+        : { label: 'LIVE', tone: 'live' }
+      : conn === 'connecting'
+        ? { label: 'CONNECTING', tone: 'wait' }
+        : conn === 'offline'
+          ? { label: 'CONNECTION INTERRUPTED', tone: 'off' }
+          : { label: 'RECONNECTING', tone: 'wait' };
 
   const router = sources?.router;
   return (
@@ -110,28 +106,14 @@ export function TopBar() {
         <span className="conn__dot" aria-hidden="true" />
         <span className="conn__label">{state.label}</span>
       </div>
-      {conn === 'demo' ? null : (
-        <div className="topbar__url num" title="Backend URL">
-          {baseUrl ? baseUrl.replace(/^https?:\/\//, '') : '…'}
-        </div>
-      )}
+      <div className="topbar__url num" title="Backend URL">
+        {baseUrl ? baseUrl.replace(/^https?:\/\//, '') : '…'}
+      </div>
       <div className="topbar__router" title="Router">
         <span className={`dot ${router?.online ? 'dot--ok' : 'dot--off'}`} aria-hidden="true" />
         <span className="topbar__model">{router?.model || 'router'}</span>
         <span className="topbar__host num">{router?.host || '—'}</span>
       </div>
-      {conn === 'demo' && liveAvailable ? (
-        <button
-          type="button"
-          className="btn btn--small btn--accent"
-          onClick={() => {
-            setPrefs({ demo: false });
-            void goLive();
-          }}
-        >
-          Backend found · go live
-        </button>
-      ) : null}
       <div className="topbar__clock num" aria-label="Local time">
         {fmtTime(now)}
       </div>
@@ -214,25 +196,57 @@ export function ConfirmDialog() {
   );
 }
 
+/** Shown when PULSE can't reach rhcsd: at startup, or when a live connection drops for more than a few seconds. */
 export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
   const unreachable = useStore((s) => s.unreachable);
   const conn = useStore((s) => s.conn);
   const baseUrl = useStore((s) => s.baseUrl);
-  if (!unreachable || conn === 'demo' || conn === 'live') return null;
+  const telemetryAt = useStore((s) => s.telemetryAt);
+  const now = useNow(1000);
+  const [downSince, setDownSince] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (conn === 'live' || conn === 'connecting') setDownSince(null);
+    else setDownSince((d) => d ?? Date.now());
+  }, [conn]);
+
+  const down = conn !== 'live' && (unreachable || (downSince !== null && now - downSince > 4000));
+  if (!down) return null;
+
+  // An https page (e.g. the hosted copy) can't call a plain-http backend other than localhost.
+  const blockedByHttps =
+    location.protocol === 'https:' && /^http:\/\//.test(baseUrl || '') && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(baseUrl || '');
+
   return (
     <div className="unreach" role="alertdialog" aria-labelledby="unreach-title">
       <div className="unreach__card panel">
-        <div className="panel__kicker">Backend</div>
+        <div className="panel__kicker">Home system</div>
         <h2 id="unreach-title" className="unreach__title">
-          rhcsd isn't answering
+          Connection interrupted
         </h2>
         <p className="muted">
-          Tried <span className="num">{baseUrl}/api/health</span>. PULSE keeps retrying in the background and connects as soon
-          as the daemon is up.
+          PULSE can't reach your home system right now. The laptop may be off, asleep, or not on this network. PULSE keeps
+          trying and reconnects by itself as soon as it's back.
         </p>
+        <dl className="kvs">
+          <div className="kv">
+            <dt className="kv__k">Trying</dt>
+            <dd className="kv__v num">{baseUrl || '…'}</dd>
+          </div>
+          <div className="kv">
+            <dt className="kv__k">Last data</dt>
+            <dd className="kv__v num">{telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</dd>
+          </div>
+        </dl>
         <ul className="unreach__tips muted">
-          <li>Start the daemon on this machine (it listens on port 7878 by default).</li>
-          <li>Opened from another device? Set the backend URL to the laptop's LAN address.</li>
+          {blockedByHttps ? (
+            <li>
+              This secure page can't open plain <span className="num">http://</span> addresses on your home network. On the
+              same Wi-Fi, open <span className="num">{baseUrl}</span> directly instead.
+            </li>
+          ) : null}
+          <li>On the laptop: make sure rhcsd is running (it prints "listening on … 7878").</li>
+          <li>On a phone or another device: be on the same Wi-Fi as the laptop, and check the address in Backend settings.</li>
         </ul>
         <div className="unreach__actions">
           <button type="button" className="btn btn--accent" onClick={() => void goLive()}>
@@ -240,13 +254,6 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
           </button>
           <button type="button" className="btn" onClick={onSettings}>
             Backend settings
-          </button>
-          <button
-            type="button"
-            className="btn btn--demo"
-            onClick={() => enterDemo('fallback')}
-          >
-            Use demo data
           </button>
         </div>
       </div>

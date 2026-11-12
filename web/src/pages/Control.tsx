@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Badge, ErrorExplain, Icon, KV, Panel, Switch } from '../components/ui';
 import { explainError, type ErrorSource } from '../lib/explain';
 import { fmtAgo, fmtDuration, isNum, str } from '../lib/format';
-import { api, enterDemo, goLive, normalizeUrl, refreshSettings } from '../lib/rhcs';
+import { api, goLive, normalizeUrl, refreshSettings } from '../lib/rhcs';
 import { confirmAction, toast, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import type { RouterAction } from '../lib/types';
@@ -82,28 +82,12 @@ export function ControlPage() {
     setPrefs({ baseUrl: next, token: token.trim() });
     setUrl(next);
     toast('ok', 'Backend settings saved', next || 'auto-detect');
-    if (conn !== 'demo') void goLive();
-  };
-
-  const toggleDemo = async (on: boolean) => {
-    const ok = await confirmAction({
-      title: on ? 'Switch to demo data?' : 'Leave demo mode?',
-      body: on
-        ? 'Live data is cleared and replaced by a simulator. A DEMO badge stays visible the whole time.'
-        : 'Simulated data is discarded and PULSE connects to the real backend.',
-      confirmLabel: on ? 'Use demo data' : 'Go live',
-    });
-    if (!ok) return;
-    setPrefs({ demo: on });
-    if (on) enterDemo('user');
-    else void goLive();
-    toast('info', on ? 'Demo mode on' : 'Demo mode off', on ? 'All values are simulated.' : 'Connecting to rhcsd…');
+    void goLive();
   };
 
   const r = sources?.router;
   const p = sources?.phone;
   const sc = sources?.scan;
-  const isDemo = conn === 'demo';
 
   return (
     <div className="page page--control">
@@ -234,7 +218,6 @@ export function ControlPage() {
             </div>
           </form>
           <div className="settings-toggles">
-            <Switch checked={isDemo} onChange={(v) => void toggleDemo(v)} label="Demo mode (simulated data)" />
             <Switch
               checked={prefs.sound}
               onChange={(v) => {

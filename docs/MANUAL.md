@@ -38,7 +38,9 @@ The bar at the top tells you whether you're seeing real data:
 |---|---|
 | **LIVE** (pulsing) | Connected; everything on screen is real and updating |
 | **RECONNECTING** | The link to the laptop dropped for a moment; it's retrying on its own |
-| **DEMO** (amber badge) | Simulated data for trying the app; nothing is real |
+| **CONNECTION INTERRUPTED** | The home system can't be reached (laptop off, asleep, or not on this network). The app keeps trying and reconnects by itself |
+
+PULSE never shows made-up data: if it can't reach your home system, it says so.
 
 ### Stopping
 Press **Ctrl+C** in the service window. Stopping never changes anything on the
@@ -120,7 +122,6 @@ Put the device near the amplifier to watch your music.
 | **LAN scan** | **Scan now** | Scan every connected network immediately; shows which networks are covered |
 | **Source health** | (information) | One card each for Router, Phone and Scanner: online/offline, when it last worked, and an explanation if something is wrong |
 | **Settings** | **Backend URL**, **Token**, **Save & reconnect** | Which laptop the app talks to, and the password for making changes from another device |
-| | **Demo mode** | Switch to simulated data (always marked DEMO) |
 | | **Event sounds** | Soft chimes for handovers, disconnects and devices joining |
 
 Every button that changes something first asks "Are you sure?", then shows a
@@ -181,7 +182,7 @@ problems), and in **Control → Source health**.
 | **The phone hasn't allowed this computer yet** | USB debugging permission missing | Unlock the phone, tap **Allow** | Yes, after you allow |
 | **The phone stopped responding** | The USB connection blipped | Check cable and port; unlock the phone | Usually yes |
 | **ADB is not installed or not found** | The laptop can't find the phone tool | Install Android platform-tools | No |
-| **rhcsd isn't answering** (full screen) | The service isn't running or can't be reached | Start it on the laptop; from a phone, check the backend URL | Yes, connects as soon as it's up |
+| **Connection interrupted** (full screen) | The home system can't be reached: laptop off, asleep, service stopped, or you're on a different network. Shows when data last arrived | Start the service on the laptop; on a phone, join the same Wi-Fi and check Backend settings | Yes, reconnects as soon as it's reachable |
 | **RECONNECTING** (top bar) | The live link blinked | Nothing | Yes |
 | **Stale** on the rings | No new reading for a few seconds | Look for an amber box explaining why | Yes |
 | **not allowed** | A change from another device without the token | Use the laptop, or set the token | n/a |
@@ -214,7 +215,6 @@ problems), and in **Control → Source health**.
 | Fix "not logged in" | Correct the password in `.env`, then **Control → Re-login** |
 | Make readings smoother | **Control → Polling**: lower the interval, **Apply** |
 | Keep a record | **Log → Export signal CSV** |
-| Try the app without devices | **Control → Settings → Demo mode** |
 
 ---
 

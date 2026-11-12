@@ -389,9 +389,11 @@ export function enterDemo(reason: 'user' | 'fallback'): void {
   }, 5000);
 }
 
+/** Always connects to the real backend. There is no demo fallback: if the
+ *  home system is off, PULSE says the connection is interrupted. */
 export function startPulse(): void {
-  if (get().prefs.demo) enterDemo('user');
-  else void goLive();
+  if (get().prefs.demo) get().setPrefs({ demo: false });
+  void goLive();
 }
 
 export function stopPulse(): void {
