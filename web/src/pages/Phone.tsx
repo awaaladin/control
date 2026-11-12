@@ -1,5 +1,6 @@
 import { GlowRing } from '../components/GlowRing';
-import { Badge, Empty, KV, Panel } from '../components/ui';
+import { Badge, Empty, ErrorExplain, KV, Panel } from '../components/ui';
+import { explainError } from '../lib/explain';
 import { bandLabel, enb, fmt, fmtAgo, fmtSigned, grade, type Grade, isNum, sector, str } from '../lib/format';
 import { isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
@@ -40,7 +41,7 @@ export function PhonePage() {
         </header>
         <Panel>
           <Empty title="No phone connected">
-            {src?.error ? <span className="num">{src.error}</span> : 'rhcsd has not reported a phone yet. Connect it over USB with debugging enabled, or pair ADB over Wi-Fi.'}
+            {src?.error ? <ErrorExplain e={explainError('phone', src.error)} /> : 'rhcsd has not reported a phone yet. Connect it over USB with debugging enabled, or pair ADB over Wi-Fi.'}
             {src?.last_ok ? <div className="muted small">Last seen {fmtAgo(src.last_ok, now)}</div> : null}
           </Empty>
         </Panel>

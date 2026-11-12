@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Badge, Icon, KV, Panel, Switch } from '../components/ui';
+import { Badge, ErrorExplain, Icon, KV, Panel, Switch } from '../components/ui';
+import { explainError, type ErrorSource } from '../lib/explain';
 import { fmtAgo, fmtDuration, isNum, str } from '../lib/format';
 import { api, enterDemo, goLive, normalizeUrl, refreshSettings } from '../lib/rhcs';
 import { confirmAction, toast, useStore } from '../lib/store';
@@ -9,7 +10,7 @@ import { runScan } from './Network';
 
 const NOT_YET = 'Not available yet: rhcsd answers 501 because this action changes router settings and has not been tested on this router.';
 
-function SourceCard({ name, online, lastOk, error, extra }: { name: string; online: boolean | undefined; lastOk: number | null | undefined; error: string | null | undefined; extra?: ReactNode }) {
+function SourceCard({ name, kind, online, lastOk, error, extra }: { name: string; kind: ErrorSource; online: boolean | undefined; lastOk: number | null | undefined; error: string | null | undefined; extra?: ReactNode }) {
   const now = useNow(2000);
   return (
     <div className={`source ${online ? 'is-ok' : 'is-down'}`}>
@@ -22,7 +23,7 @@ function SourceCard({ name, online, lastOk, error, extra }: { name: string; onli
         <KV k="Last OK" v={lastOk ? fmtAgo(lastOk, now) : '—'} />
         {extra}
       </dl>
-      {error ? <p className="source__err num">{error}</p> : null}
+      {error ? <ErrorExplain e={explainError(kind, error)} compact /> : null}
     </div>
   );
 }
@@ -196,10 +197,11 @@ export function ControlPage() {
 
         <Panel title="Source health" kicker="from rhcsd status" className="ctl-health">
           <div className="sources">
-            <SourceCard name="Router" online={r?.online} lastOk={r?.last_ok} error={r?.error} extra={<KV k="Logged in" v={r?.logged_in ? 'yes' : r?.logged_in === false ? 'no' : '—'} />} />
-            <SourceCard name="Phone" online={p?.online} lastOk={p?.last_ok} error={p?.error} />
+            <SourceCard name="Router" kind="router" online={r?.online} lastOk={r?.last_ok} error={r?.error} extra={<KV k="Logged in" v={r?.logged_in ? 'yes' : r?.logged_in === false ? 'no' : '—'} />} />
+            <SourceCard name="Phone" kind="phone" online={p?.online} lastOk={p?.last_ok} error={p?.error} />
             <SourceCard
               name="Scanner"
+              kind="router"
               online={sc ? true : undefined}
               lastOk={sc?.last_run}
               error={null}

@@ -2,7 +2,8 @@ import { useEffect, useMemo } from 'react';
 import { GlowRing } from '../components/GlowRing';
 import { SeriesChart } from '../components/SeriesChart';
 import { ThroughputChart } from '../components/ThroughputChart';
-import { Badge, Icon, KV, Panel, Segmented, Tween } from '../components/ui';
+import { Badge, ErrorExplain, Icon, KV, Panel, Segmented, Tween } from '../components/ui';
+import { explainError } from '../lib/explain';
 import {
   bandLabel,
   DESCRIPTIONS,
@@ -160,6 +161,7 @@ export function SignalPage() {
   const setAim = useStore((s) => s.setAim);
   const conn = useStore((s) => s.conn);
   const telemetryAt = useStore((s) => s.telemetryAt);
+  const routerSrc = useStore((s) => s.sources?.router);
   const now = useNow(1000);
   const stale = isStale(telemetryAt, STALE_MS.telemetry, now);
 
@@ -186,6 +188,12 @@ export function SignalPage() {
           </button>
         </div>
       </header>
+
+      {routerSrc && !routerSrc.online && routerSrc.error && conn !== 'demo' ? (
+        <ErrorExplain e={explainError('router', routerSrc.error)} />
+      ) : routerSrc?.online && routerSrc.logged_in === false && routerSrc.error && conn !== 'demo' ? (
+        <ErrorExplain e={explainError('router', routerSrc.error)} />
+      ) : null}
 
       <section className="rings" aria-label="Signal gauges">
         <MetricRing metric="rsrp" value={t?.rsrp} />

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { isNum, prefersReducedMotion } from '../lib/format';
 import { subscribeTick } from '../lib/ticker';
+import type { Explained } from '../lib/explain';
 
 export function Panel({
   title,
@@ -167,6 +168,26 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
       </span>
       <span className="switch__label">{label}</span>
     </button>
+  );
+}
+
+/** A backend error in plain words: what happened, what to do, and the raw text. */
+export function ErrorExplain({ e, compact }: { e: Explained | null; compact?: boolean }) {
+  if (!e) return null;
+  return (
+    <div className={`explain ${compact ? 'explain--compact' : ''}`} role="status">
+      <div className="explain__title">{e.title}</div>
+      <p className="explain__detail">{e.detail}</p>
+      <ol className="explain__fixes">
+        {e.fixes.map((f) => (
+          <li key={f}>{f}</li>
+        ))}
+      </ol>
+      <details className="explain__raw">
+        <summary>Technical detail</summary>
+        <code>{e.raw}</code>
+      </details>
+    </div>
   );
 }
 
