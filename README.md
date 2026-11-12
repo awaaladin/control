@@ -4,6 +4,9 @@
 and eventually controlling the hardware in a home (router, phone, TV decoder,
 amplifier) from one place, written in Rust.
 
+New here? Read the **[complete guide](docs/GUIDE.md)**: every part of the codebase,
+setup, usage, the API and a glossary of every abbreviation.
+
 `rhcs` is a command-line tool for looking at and monitoring a home network:
 it finds devices on the LAN, fingerprints what they run, and reads live LTE
 signal data from ZTE 4G routers through their own web API.

@@ -27,7 +27,7 @@ pub struct ScanTarget {
 /// Large subnets are clamped to the /24 around our address.
 pub fn targets(gateways: &[Ipv4Addr], extra_cidrs: &[String]) -> Vec<ScanTarget> {
     let mut out: Vec<ScanTarget> = Vec::new();
-    let mut add = |t: ScanTarget, out: &mut Vec<ScanTarget>| {
+    let add = |t: ScanTarget, out: &mut Vec<ScanTarget>| {
         if !out.iter().any(|o| o.subnet == t.subnet) {
             out.push(t);
         }

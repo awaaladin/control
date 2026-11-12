@@ -49,6 +49,14 @@ Facts about the actual hardware, each tagged with how we know it.
   firmware update, recording), Ethernet RJ-45 used for software updates
 - UNSUPPORTED (unknown): no evidence of RS-232, open SDK or HDMI-CEC
 - THEORY: primary control path is its IR remote (Strong remotes commonly use NEC protocol)
+- OBSERVED 2026-11-11: has an "IP Settings" menu with DHCP; on DHCP it gets a lease from the
+  router. MAC prefix 00:22:D3 = Hub-Tech (the OEM behind this Strong model). Router lists it in
+  `lan_station_list` with hostname "host"
+- OBSERVED: from the laptop (same LAN, router client isolation `NoForwarding=0`) it answers no
+  ARP, no ping, and has no open TCP port in 1-10000: it runs no network services
+- THEORY: the network menu shows "View List / SCAN / Firmware Update", so it is likely a
+  network *client* (UPnP/DLNA media browsing, firmware download). Plan: make rhcsd a DLNA
+  media server the decoder can find with SCAN, to play laptop media on the TV
 
 ## Phone: vivo Y03 (V2333 / V2332), Android 16, MediaTek MT6769, arm64-v8a
 - OBSERVED: no IR emitter (no `android.hardware.consumerir`), no magnetometer/compass

@@ -116,14 +116,19 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Where the headers end. Embedded servers mix `\n` and `\r\n` line endings
+/// (the ZTE MF293N ends some header lines with a bare `\n`, so its blank line
+/// shows up as `\n\r\n`), so take the earliest blank line in any style.
+fn header_end(raw: &[u8]) -> (usize, usize) {
+    [&b"\r\n\r\n"[..], b"\n\r\n", b"\n\n"]
+        .iter()
+        .filter_map(|sep| find(raw, sep).map(|i| (i, sep.len())))
+        .min_by_key(|(i, _)| *i)
+        .unwrap_or((raw.len(), 0))
+}
+
 pub fn parse(raw: &[u8]) -> Result<HttpResponse> {
-    let (head_end, sep) = match find(raw, b"\r\n\r\n") {
-        Some(i) => (i, 4),
-        None => match find(raw, b"\n\n") {
-            Some(i) => (i, 2),
-            None => (raw.len(), 0),
-        },
-    };
+    let (head_end, sep) = header_end(raw);
     let head = String::from_utf8_lossy(&raw[..head_end]);
     let mut lines = head.lines();
     let status_line = lines.next().unwrap_or_default();
@@ -202,6 +207,19 @@ mod tests {
         assert_eq!(r.status, 200);
         assert_eq!(r.header("SERVER"), Some("uhttpd"));
         assert_eq!(r.title().as_deref(), Some("LuCI Admin"));
+    }
+
+    #[test]
+    fn mixed_line_endings_from_zte() {
+        // Byte-for-byte layout of the MF293N's reply to the LOGIN POST (2026-11-12):
+        // status line and Set-Cookie end in a bare \n, the rest in \r\n.
+        let raw = b"HTTP/1.0 200 OK\nPragma: no-cache\r\nCache-control: no-cache\r\nContent-Type: text/html\r\n\
+X-Frame-Options: sameorigin\r\nX-XSS-Protection: 1; mode=block\r\n\
+Set-Cookie: zsidn=SESSION;path=/;HttpOnly=1;Expires=Mon, 1 Jan 2050 00:00:00 GMT\n\r\n{\"result\":\"0\"}";
+        let r = parse(raw).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, "{\"result\":\"0\"}");
+        assert!(r.header("set-cookie").unwrap().starts_with("zsidn=SESSION"));
     }
 
     #[test]
