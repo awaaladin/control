@@ -42,7 +42,7 @@ export interface TowerCell {
   router: SourceStats | null;
   phone: SourceStats | null;
   location: CellLocation | null;
-  lookup: { status: 'no_key' | 'incomplete' | 'pending' | 'found' | 'not_found' | 'error'; at?: number; message: string | null };
+  lookup: { status: 'off' | 'incomplete' | 'pending' | 'found' | 'not_found' | 'error'; at?: number; message: string | null };
   distance_m: number | null;
   bearing_deg: number | null;
   compass: string | null;
@@ -72,9 +72,16 @@ export interface HomeLocation {
 }
 
 export interface TowersView {
+  /** An OpenCellID key is set (beaconDB needs none). */
   key_configured: boolean;
+  lookup?: { enabled: boolean; sources: string[] };
   message: string | null;
+  /** Where distances are measured from: the manual home, else the phone's position. */
   home: HomeLocation | null;
+  /** True when `home` is the manual home (.env or browser), false when it is the phone's position. */
+  home_manual?: boolean;
+  /** The phone's latest position (map only). */
+  current?: HomeLocation | null;
   serving: { router: string | null; phone: string | null };
   cells: TowerCell[];
   handovers: TowerHandover[];
@@ -137,4 +144,72 @@ export function shareThisDeviceLocation(): void {
     (err) => toast('error', 'Location not shared', err.message || 'The browser refused to share the location.'),
     { enableHighAccuracy: true, timeout: 20_000, maximumAge: 60_000 },
   );
+}
+
+// ---------------------------------------------------------------- automatic places
+
+export interface PlaceSig {
+  samples: number;
+  avg_sinr: number | null;
+  best_sinr: number | null;
+  avg_rsrp: number | null;
+  best_rsrp: number | null;
+}
+
+export interface Place {
+  id: number;
+  rank: number;
+  label: string;
+  name: string | null;
+  /** In words, e.g. "about 20 m north-east of home". */
+  where: string;
+  distance_m: number | null;
+  compass: string | null;
+  samples: number;
+  quality_sinr: number | null;
+  router: PlaceSig | null;
+  phone: PlaceSig | null;
+  accuracy_m: number;
+  first_seen: number;
+  last_seen: number;
+  is_current: boolean;
+}
+
+export interface PlacesView {
+  home: 'manual' | 'most_visited' | 'none';
+  current_place: number | null;
+  places: Place[];
+  position: { provider: string; via: string; accuracy_m: number | null; age_s: number; fresh: boolean } | null;
+  position_error: string | null;
+}
+
+interface PlacesStore {
+  view: PlacesView | null;
+  unsupported: boolean;
+}
+
+export const usePlaces = create<PlacesStore>()(() => ({ view: null, unsupported: false }));
+
+export async function refreshPlaces(): Promise<void> {
+  const a = await getJson<PlacesView>('/api/places');
+  if (a.ok && a.data) usePlaces.setState({ view: a.data, unsupported: false });
+  else if (a.status === 404) usePlaces.setState({ unsupported: true });
+}
+
+export function usePlacesPolling(): void {
+  const baseUrl = useStore((s) => s.baseUrl);
+  const conn = useStore((s) => s.conn);
+  useEffect(() => {
+    if (!baseUrl || conn === 'demo') return;
+    void refreshPlaces();
+    const t = window.setInterval(() => void refreshPlaces(), 15_000);
+    return () => window.clearInterval(t);
+  }, [baseUrl, conn]);
+}
+
+export async function renamePlace(id: number, name: string): Promise<void> {
+  const a = await postJson(`/api/places/${id}/name`, { name });
+  if (a.ok) toast('ok', 'Place renamed', a.message);
+  else if (a.status !== 401) toast('error', 'Could not rename', a.message);
+  void refreshPlaces();
 }

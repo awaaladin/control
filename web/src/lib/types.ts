@@ -61,6 +61,19 @@ export interface Sources {
   router?: RouterSource;
   phone?: PhoneSource;
   scan?: ScanSource;
+  /** The phone's position (Termux:API or ADB). */
+  location?: PhoneSource;
+}
+
+/** The phone's position. Only drawn inside the map, never as text. */
+export interface PhoneFix {
+  lat: number;
+  lon: number;
+  accuracy_m: number | null;
+  provider: string;
+  via: 'termux' | 'adb' | string;
+  fix_ts: number;
+  read_ts: number;
 }
 
 export interface Port {
@@ -108,7 +121,7 @@ export interface HotspotClient {
 export interface PhoneStatus {
   model?: string | null;
   android?: string | null;
-  transport?: 'usb' | 'wifi' | null;
+  transport?: 'usb' | 'wifi' | 'local' | null;
   battery_level?: number | null;
   battery_temp_c?: number | null;
   charging?: boolean | null;
@@ -153,6 +166,9 @@ export interface Health {
   uptime_s?: number;
   capabilities?: string[];
   auth_required?: boolean;
+  /** rhcsd runs as administrator (link switching possible). */
+  admin?: boolean;
+  switch_supported?: boolean;
   sources?: Sources;
 }
 
@@ -172,6 +188,7 @@ export type WsMessage =
   | { type: 'telemetry'; ts: number; data: Telemetry }
   | { type: 'phone'; ts: number; data: PhoneStatus }
   | { type: 'devices'; ts: number; data: DeviceView[] }
+  | { type: 'location'; ts: number; data: PhoneFix }
   | ({ type: 'event' } & RhcsEvent);
 
 export type RouterAction = 'relogin' | 'reconnect' | 'disconnect' | 'set_network_mode';

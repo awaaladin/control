@@ -5,9 +5,13 @@ import { load, type MarkedSpot } from '../lib/prefs';
 import { useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import {
+  renamePlace,
   shareThisDeviceLocation,
+  usePlaces,
+  usePlacesPolling,
   useTowers,
   useTowersPolling,
+  type Place,
   type SourceStats,
   type TowerCell,
   type TowerHandover,
@@ -41,26 +45,120 @@ function Arrow({ deg }: { deg: number }) {
   );
 }
 
+/** A place marked in Aim mode takes that spot's name, unless it was renamed. */
+function placeName(p: Place, spots: MarkedSpot[]): string {
+  if (p.name) return p.name;
+  const spot = spots.find((s) => s.place_id === p.id);
+  return spot ? spot.label : p.label;
+}
+
+/** Places found automatically from the phone's position + signal, best first. */
+function PlacesList({ spots }: { spots: MarkedSpot[] }) {
+  usePlacesPolling();
+  const pv = usePlaces((s) => s.view);
+  const unsupported = usePlaces((s) => s.unsupported);
+  if (unsupported) return <p className="muted small">This rhcsd doesn't find places automatically yet. Update and restart it.</p>;
+  if (!pv) return <p className="muted small">Loading places…</p>;
+  if (!pv.places.length) {
+    return (
+      <p className="muted small">
+        No places yet. They're found automatically from the phone's position every 30 s, with the router's and the phone's signal at that
+        moment.{' '}
+        {pv.position_error
+          ? `Right now: ${pv.position_error}.`
+          : pv.position
+            ? 'Waiting for a precise enough position (better than 50 m).'
+            : ''}
+      </p>
+    );
+  }
+  return (
+    <>
+      <ol className="places">
+        {pv.places.slice(0, 6).map((p, i) => {
+          const name = placeName(p, spots);
+          const sig = p.router ?? p.phone;
+          const who = p.router ? 'router' : 'phone';
+          return (
+            <li key={p.id} className={i === 0 && p.quality_sinr !== null ? 'is-best' : ''}>
+              <span className="places__name">
+                {name}
+                {p.is_current ? <Badge tone="live">phone is here</Badge> : null}
+                <button
+                  type="button"
+                  className="linkbtn small"
+                  onClick={() => {
+                    const n = window.prompt(`Name for "${name}" (leave empty to clear):`, p.name ?? '');
+                    if (n !== null) void renamePlace(p.id, n);
+                  }}
+                >
+                  rename
+                </button>
+              </span>
+              <span className="num">
+                {sig && isNum(sig.avg_sinr) ? (
+                  <>
+                    <span className={`g-${grade('sinr', sig.avg_sinr)}`}>{fmt(sig.avg_sinr, 1)} dB</span>
+                    <span className="muted small"> {who}</span>
+                  </>
+                ) : (
+                  <span className="muted small">no signal reading</span>
+                )}
+              </span>
+              <span className="places__where muted small">
+                {p.where} · {p.samples} reading{p.samples === 1 ? '' : 's'}
+                {p.router && p.phone && isNum(p.phone.avg_sinr) ? ` · phone ${fmt(p.phone.avg_sinr, 1)} dB` : ''}
+                {sig && isNum(sig.avg_rsrp) ? ` · RSRP ${fmt(sig.avg_rsrp)} dBm` : ''}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {pv.position && !pv.position.fresh ? (
+        <p className="muted small">
+          The phone's last position is {Math.round(pv.position.age_s / 60)} min old, so no new readings are added right now.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /**
- * Side by side, in plain words (no coordinates): where in the house you got
- * the best signal (Aim-mode spots + right now) and where the tower is.
+ * Side by side, in plain words (no coordinates): where you got the best
+ * signal (automatic places, Aim-mode spots, right now) and where the tower is.
  */
 function WhereBest({ v }: { v: TowersView }) {
   const t = useStore((s) => s.telemetry);
-  const spots = load<MarkedSpot[]>('spots', [])
-    .filter((s) => isNum(s.sinr))
-    .sort((a, b) => (b.sinr ?? -99) - (a.sinr ?? -99));
+  const allSpots = load<MarkedSpot[]>('spots', []);
+  const spots = allSpots.filter((s) => isNum(s.sinr)).sort((a, b) => (b.sinr ?? -99) - (a.sinr ?? -99));
   const best = spots[0];
+  const here = usePlaces((s) => s.view?.places.find((p) => p.is_current));
   const byKey = new Map(v.cells.map((c) => [c.key, c]));
   const routerCell = v.serving.router ? byKey.get(v.serving.router) : undefined;
   const phoneCell = v.serving.phone ? byKey.get(v.serving.phone) : undefined;
   const towerCell = routerCell ?? phoneCell;
   const located = towerCell && isNum(towerCell.distance_m) && isNum(towerCell.bearing_deg);
   const dir = towerCell?.compass ? COMPASS_WORDS[towerCell.compass] ?? towerCell.compass : null;
+  const lookupOff = v.lookup ? !v.lookup.enabled : false;
+  let why = '';
+  if (towerCell) {
+    const l = towerCell.lookup;
+    if (lookupOff) why = 'Tower lookups are off (TOWER_LOOKUP=off), so its position is unknown.';
+    else if (towerCell.location && !v.home)
+      why = "The tower's position is known; for direction and distance rhcs also needs yours: connect the phone (its location is read automatically) or press \"Use this device's location\" below.";
+    else if (l.status === 'pending') why = 'Looking up where this tower stands…';
+    else if (l.status === 'not_found') why = `No public database knows where this tower stands yet (${l.message ?? 'not found'}); it is asked again weekly.`;
+    else if (l.status === 'error') why = `The tower lookup failed (${l.message ?? 'error'}); retried in 10 minutes.`;
+    else if (l.status === 'incomplete') why = "The tower's area code is missing, so it can't be looked up.";
+  }
 
   return (
     <section className="where" aria-label="Where you get the best network">
       <Panel kicker="In your home" title="Your spots">
+        <h3 className="where__sub">Best places (automatic)</h3>
+        <PlacesList spots={allSpots} />
+
+        <h3 className="where__sub">Marked spots</h3>
         {spots.length ? (
           <>
             <p className="where__lead">
@@ -78,9 +176,9 @@ function WhereBest({ v }: { v: TowersView }) {
             </ol>
           </>
         ) : (
-          <p className="muted">
-            No spots marked yet. Open <strong>Signal → Aim mode</strong>, carry the router to different places (window,
-            shelf, upstairs…) and press <strong>Mark spot</strong> at each one. They'll be ranked here.
+          <p className="muted small">
+            No spots marked yet. Open <strong>Signal → Aim mode</strong>, carry the router to different places (window, shelf, upstairs…)
+            and press <strong>Mark spot</strong> at each one. They'll be ranked here.
           </p>
         )}
         <p className="where__now">
@@ -98,6 +196,12 @@ function WhereBest({ v }: { v: TowersView }) {
           ) : (
             <span className="muted">no router reading</span>
           )}
+          {here ? (
+            <span className="muted">
+              {' '}
+              · the phone is at {placeName(here, allSpots)} ({here.where})
+            </span>
+          ) : null}
         </p>
       </Panel>
 
@@ -109,7 +213,8 @@ function WhereBest({ v }: { v: TowersView }) {
               <p className="where__lead">
                 {located ? (
                   <>
-                    The tower is <strong>{distanceWords(towerCell.distance_m!)}</strong> away, to the <strong>{dir}</strong>.
+                    The tower is <strong>{distanceWords(towerCell.distance_m!)}</strong> away, to the <strong>{dir}</strong>
+                    {v.home_manual === false ? ' of where the phone is now' : ''}.
                   </>
                 ) : (
                   <>
@@ -130,10 +235,7 @@ function WhereBest({ v }: { v: TowersView }) {
                     that way. Walls and metal between it and the tower cost the most signal.
                   </>
                 ) : (
-                  <span className="muted">
-                    To show the tower's direction and distance, add an OpenCellID key and share this device's location
-                    (see below). Until then, your marked spots on the left are the best guide.
-                  </span>
+                  <span className="muted">{why} Until then, your places and marked spots on the left are the best guide.</span>
                 )}
               </p>
             </div>
@@ -167,46 +269,34 @@ function lookupText(c: TowerCell): { text: string; tone: string } {
     case 'pending':
       return { text: 'looking up…', tone: 'neutral' };
     case 'not_found':
-      return { text: 'not in OpenCellID', tone: 'fair' };
+      return { text: 'position unknown', tone: 'fair' };
     case 'error':
       return { text: 'lookup failed', tone: 'poor' };
     case 'incomplete':
       return { text: 'IDs incomplete', tone: 'fair' };
     default:
-      return { text: 'no key', tone: 'neutral' };
+      return { text: 'lookups off', tone: 'neutral' };
   }
 }
 
-function NoKey() {
+function LookupOff() {
   return (
-    <Panel kicker="Map" title="Tower locations need an OpenCellID key">
+    <Panel kicker="Map" title="Tower lookups are off">
       <p className="small">
-        rhcs knows which towers your router and phone use, but not where they stand. OpenCellID is a free, open database of tower
-        positions. Nothing is guessed without it.
+        rhcs knows which towers your router and phone use, but <code>TOWER_LOOKUP=off</code> in <code>.env</code> stops it asking public
+        databases where they stand, so no positions are shown. Nothing is guessed.
       </p>
-      <ol className="tips">
-        <li>
-          Sign up for free at{' '}
-          <a href="https://opencellid.org/register.php" target="_blank" rel="noreferrer">
-            opencellid.org
-          </a>{' '}
-          and copy your access token.
-        </li>
-        <li>
-          Add it to <code>.env</code> on the laptop: <code>OPENCELLID_KEY=your-token</code>
-        </li>
-        <li>
-          Optional, for distance and direction: <code>HOME_LAT=…</code> and <code>HOME_LON=…</code> (from any map app: long-press your
-          house).
-        </li>
-        <li>Restart rhcsd. Tower positions appear here within a minute.</li>
-      </ol>
       <p className="muted small">
-        With a key, rhcsd sends the IDs of the towers it has seen (not your location) to OpenCellID, and caches the answers in{' '}
-        <code>data/towers.json</code>.
+        To turn lookups back on, remove that line (or set <code>TOWER_LOOKUP=on</code>) and restart rhcsd. Only tower IDs are sent, never
+        your position.
       </p>
     </Panel>
   );
+}
+
+function sourcesText(v: TowersView): string {
+  const names = (v.lookup?.sources ?? ['beacondb']).map((x) => (x === 'beacondb' ? 'beaconDB' : x === 'opencellid' ? 'OpenCellID' : x));
+  return names.join(' and ') || 'no database';
 }
 
 function CellTable({ cells, now }: { cells: TowerCell[]; now: number }) {
@@ -309,17 +399,18 @@ function MapPanel({ v }: { v: TowersView }) {
     >
       {v.message ? <p className="small g-fair">{v.message}</p> : null}
       {located.length || v.home ? (
-        <TowerMap home={v.home} cells={v.cells} bestKey={v.best?.key ?? null} />
+        <TowerMap home={v.home} homeManual={v.home_manual ?? true} current={v.current ?? null} cells={v.cells} bestKey={v.best?.key ?? null} />
       ) : (
         <Empty title="No tower positions yet">
           {pending
-            ? `Looking up ${pending} tower${pending === 1 ? '' : 's'} on OpenCellID…`
-            : 'None of the towers seen so far are in the OpenCellID database. They will be retried weekly.'}
+            ? `Looking up ${pending} tower${pending === 1 ? '' : 's'} (${sourcesText(v)})…`
+            : `None of the towers seen so far are in ${sourcesText(v)} yet. They are asked again weekly.`}
         </Empty>
       )}
       <p className="muted small">
-        Lines run from home to each tower; solid = serving now, colour = average SINR seen on it. Tower positions are OpenCellID estimates
-        and can be off by hundreds of metres.
+        Lines run from {v.home_manual === false ? "the phone's position" : 'home'} to each tower; solid = serving now, colour = average SINR
+        seen on it. Tower positions are estimates from {sourcesText(v)} and can be off by hundreds of metres. Only tower IDs are sent to
+        them, never your position.
       </p>
     </Panel>
   );
@@ -369,14 +460,12 @@ export function TowersPage() {
     <div className="page page--towers">
       {head}
       <WhereBest v={v} />
-      {v.key_configured ? <MapPanel v={v} /> : <NoKey />}
+      {v.lookup && !v.lookup.enabled ? <LookupOff /> : <MapPanel v={v} />}
 
       {v.best ? (
         <Panel kicker="Best direction" title="Cleanest tower so far" className="towerbest">
           <p>{v.best.message}</p>
-          {!v.key_configured || !v.home ? (
-            <p className="muted small">Direction needs both an OpenCellID key and a home location.</p>
-          ) : null}
+          {!v.home ? <p className="muted small">Direction needs the tower's position and yours (the phone's, or a home location).</p> : null}
         </Panel>
       ) : null}
 

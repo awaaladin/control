@@ -1,6 +1,6 @@
 // Shared canvas chart helpers.
 
-import { samples, type Field } from './buffer';
+import { samples as routerSamples, type Field, type SampleBuffer } from './buffer';
 import { fmtTime } from './format';
 import type { RhcsEvent } from './types';
 
@@ -91,7 +91,7 @@ function alloc(key: string, n: number): Series {
  * more samples than pixels, values are folded into per-pixel buckets
  * (mean for the line, min/max for the envelope, or max with `peak`).
  */
-export function collect(key: string, field: Field, t0: number, t1: number, p: Plot, gapMs: number, peak = false): Series {
+export function collect(key: string, field: Field, t0: number, t1: number, p: Plot, gapMs: number, peak = false, samples: SampleBuffer = routerSamples): Series {
   const span = t1 - t0;
   const i0 = Math.max(0, samples.lowerBound(t0) - 1);
   const i1 = samples.len;

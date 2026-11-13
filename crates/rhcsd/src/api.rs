@@ -17,7 +17,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
-pub const CAPABILITIES: &[&str] = &["telemetry", "history", "devices", "phone", "events", "router_relogin", "scan", "boost", "towers", "location"];
+pub const CAPABILITIES: &[&str] = &[
+    "telemetry", "history", "devices", "phone", "events", "router_relogin", "scan", "boost", "towers", "location", "connections",
+    "places", "switch", "boost_auto",
+];
 
 pub fn router(s: Shared) -> Router {
     let cors = CorsLayer::new()
@@ -40,6 +43,9 @@ pub fn router(s: Shared) -> Router {
         .route("/ws", get(ws))
         .merge(crate::boost::routes())
         .merge(crate::towers::routes())
+        .merge(crate::places::routes())
+        .merge(crate::connections::routes())
+        .merge(crate::switch::routes())
         .with_state(s.clone());
 
     let web = s.cfg.web_dir.clone();
@@ -83,6 +89,8 @@ async fn health(State(s): State<Shared>) -> Json<Value> {
         "uptime_s": s.started.elapsed().as_secs(),
         "capabilities": CAPABILITIES,
         "auth_required": s.cfg.token.is_some(),
+        "admin": s.admin,
+        "switch_supported": crate::switch::supported(),
         "sources": sources,
     }))
 }

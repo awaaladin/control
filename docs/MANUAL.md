@@ -52,16 +52,31 @@ router or phone.
 
 Use the menu on the left (on a phone: the tab bar at the bottom).
 
-### 2.1 Signal: your 4G connection, live
-What you see:
+### 2.1 Signal: every connection, live
+The laptop can have several internet connections at once. Each one is listed
+**by name** at the top of the page, for example **Jeffnou (router)** (the
+router's Wi-Fi name), **vivo Y (phone hotspot)** or **Phone (USB)**. Tap a name
+to see that connection's signal; the one marked **in use** is the one Windows
+is using now and is shown first.
+
 | Part | What it tells you |
 |---|---|
+| **Connection chips** | Pick which connection the rings, graphs and tower card show |
+| **Connections** | All connections side by side by name: SINR, RSRP and ping (from the last Game Boost run). The best one is highlighted (lowest Game Boost score, or the cleanest signal if nothing was measured). If rhcs can't read a connection's radio it says why, e.g. "the phone isn't connected over ADB" |
 | **Three glowing rings** | **RSRP** (signal strength), **SINR** (signal cleanliness), **RSRQ** (signal quality). Colour: green excellent, cyan good, amber fair, red poor. The rings gently pulse while data flows and turn grey with the word **Stale** if readings stop |
 | **Down / Up** | Current download and upload speed through the router |
 | **Timeline** | Moving graphs of the three signal values. Choose the window: **1 min, 10 min, 1 h, 24 h**. Touch or hover a graph to read exact values at that moment |
 | **Throughput** | Download (above the line) and upload (below) over time |
 | **Serving cell (Tower)** | Which tower and antenna the router is using: eNB (tower number), sector, PCI, band (e.g. B7 · 2600 MHz), channel, data used this session and this month |
 | **Handovers** | Each time the router switches tower or band. Also shown as glowing markers on the graphs |
+
+For a **phone** connection the rings and graphs show the phone's own radio. Its
+graphs start when you open PULSE (the phone's readings aren't stored on the
+laptop), and Down/Up speed is only known for the router's connection.
+A Wi-Fi connection is named after its Wi-Fi network. If the phone's hotspot
+shows up as "… (Wi-Fi)" instead of "… (phone hotspot)", either connect the
+phone over ADB once (rhcs then recognises it) or add its Wi-Fi name to `.env`:
+`PHONE_HOTSPOT_SSID=vivo Y`.
 
 What the numbers mean:
 | Value | Excellent | Good | Fair | Poor |
@@ -159,13 +174,41 @@ the like).
 3. The **Recommendation** box names the best connection, for example
    *"Use Phone (USB): 38 ms vs 71 ms, jitter 4 ms vs 19 ms"*, and explains why
    in plain words.
-4. If the best connection isn't the one Windows uses, the box shows the
-   command to switch, e.g.
-   `powershell -ExecutionPolicy Bypass -File scripts\lan-only.ps1 -Interface "Wi-Fi"`.
-   Run it yourself in an **admin** PowerShell in the rhcs folder; add `-Undo`
-   to go back. rhcs never runs it for you and never changes network settings.
-5. **Keep measuring** (switch at the top) repeats the test every 10 seconds
+4. To use the best connection, press **Switch now** on its card (it asks
+   first). Windows then sends **new** connections through it.
+   **Your current game keeps its connection; new connections use the new
+   link.** So switch before starting a match, or rejoin after switching.
+5. **Restore automatic** puts every connection back exactly as it was, so
+   Windows chooses again (it also turns auto-switch off).
+6. **Auto-switch** (switch in the "Use the best link automatically" box)
+   keeps measuring gently, a few tiny connection tests per link every 12
+   seconds that don't disturb your traffic, and switches by itself only when
+   another connection is clearly better (at least 20 % and 15 ms lower score)
+   three times in a row, and never more than once every 2 minutes, so it
+   doesn't flip back and forth. Each switch appears in the Log, e.g.
+   "switched to Phone (USB): 41 ms vs 88 ms", and the box shows its last
+   decision in words.
+7. **Keep measuring** (switch at the top) repeats the test every 10 seconds
    until you press **Stop watching**: useful while moving the router.
+
+**Switching needs rhcsd to run as administrator.** The box shows
+**administrator** or **not administrator**. When it isn't, the switch and
+buttons are greyed out and the box tells you how to fix it:
+1. In rhcsd's window press **Ctrl+C**.
+2. Start menu → type **PowerShell** → right-click **Windows PowerShell** →
+   **Run as administrator**.
+3. Run `cd D:\setup\rhcs` then `.\target\debug\rhcsd.exe`.
+4. Reload PULSE.
+
+Without administrator rights Game Boost still measures and the
+Recommendation box still shows the command
+(`powershell -ExecutionPolicy Bypass -File scripts\lan-only.ps1 -Interface "Wi-Fi"`)
+you can run yourself in an admin PowerShell (`-Undo` goes back).
+How switching works: Windows sends new connections over the connection with
+the lowest "metric" (priority number). Switch now gives the chosen one 10 and
+the others 500; Restore puts back what was there before (remembered in
+`data/switch.json`, even across restarts). Switching never touches the router
+or phone settings.
 
 Game Boost **cannot make the signal stronger** and cannot change how your
 operator routes traffic. It tests general internet servers (Cloudflare, Google
@@ -186,23 +229,42 @@ restarts (they're saved in `data/towers.json`).
 
 | Part | What it shows |
 |---|---|
-| **Map** | Home (teal dot), each tower, and a line from home to each tower. Line colour = average SINR seen on that tower; solid line = serving now; thickest line = cleanest tower. Needs an OpenCellID key |
-| **Cleanest tower so far** | The cell with the best average SINR, and (with a key and home location) its distance and direction, e.g. "about 1.8 km to the north-east (47°)". Placing the router on the side of the house facing that direction usually helps |
+| **Your spots → Best places (automatic)** | Places in and around your home, found by themselves and ranked best first: e.g. "Place 3 · about 20 m north-east of home · 21.5 dB router". **phone is here** marks where the phone is now. **rename** gives a place your own name |
+| **Your spots → Marked spots** | The spots you marked in Aim mode, best first (kept in this browser, as before). A place where you marked a spot takes that spot's name |
+| **Your spots → Right now** | The router's signal now compared with your best spot, and which place the phone is at |
+| **Your tower** | Which tower you're on and, once its position is known, how far and in which direction it is, in words ("about 1.8 km away, to the north-east") with an arrow |
+| **Map** | Home (teal dot), the phone's last position (violet dot), each tower, and a line from home to each tower. Line colour = average SINR seen on that tower; solid line = serving now; thickest line = cleanest tower. Coordinates appear only inside the map |
+| **Cleanest tower so far** | The cell with the best average SINR, and its distance and direction, e.g. "about 1.8 km to the north-east (47°)". Placing the router on the side of the house facing that direction usually helps |
 | **Cells** | eNB (tower) and sector, PCI, band, time spent on it by router and phone, SINR average / best, RSRP average, distance and direction, when last seen. **router now / phone now** marks the current cell |
 | **Handovers** | Every switch from one cell to another, by router or phone, with how long it stayed on the previous cell. Many short stays mean the router sits between two towers: try Aim mode |
 | **Use this device's location** | Saves the position of the device you're holding as "home". Browsers only allow this on the laptop itself (`http://localhost:7878`) |
 
-**Tower positions need a free OpenCellID key.** Without one the map is replaced
-by instructions and nothing is guessed:
-1. Sign up at **opencellid.org** and copy your access token.
-2. Add `OPENCELLID_KEY=your-token` to `.env`.
-3. Optional, for distance and direction: `HOME_LAT=` and `HOME_LON=` (decimal
-   degrees, from any map app).
-4. Restart rhcsd.
+**Tower positions work without any setup.** rhcsd asks **beaconDB**, a free
+open database of tower positions, about each cell it has seen, one at a time,
+and keeps the answers. If you also add a free **OpenCellID** key
+(`OPENCELLID_KEY=your-token` in `.env`, sign up at opencellid.org), cells that
+beaconDB doesn't know are asked there too. A cell no database knows shows
+**position unknown** and is asked again weekly: nothing is guessed.
 
-With a key, rhcsd sends the IDs of the cells it has seen (never your location)
-to OpenCellID, one at a time, and keeps the answers. OpenCellID positions are
-estimates collected by volunteers and can be off by a few hundred metres.
+**Your position** comes from the phone by itself: every 30 seconds rhcsd reads
+the position Android already has (over ADB on the laptop, or with Termux:API
+when rhcsd runs on the phone). Turn on **Location** on the phone. That
+position is used for direction and distance, unless you set a fixed home:
+`HOME_LAT=` / `HOME_LON=` in `.env` or **Use this device's location**. A fixed
+home always wins; the phone's position is then shown separately.
+
+**How automatic places work.** Each time a position is read, rhcs notes it
+together with the router's and the phone's signal at that moment. Readings
+within about 15 m of each other (more when the phone's position is fuzzy) are
+one place. Places are ranked by average SINR and described from home in words.
+If no home is set, the place where the phone is most often counts as home.
+Places are saved in `data/places.json` on the laptop.
+
+**Privacy.** Only tower IDs (country, network, area and cell number) are sent to
+beaconDB and OpenCellID, never your position; rhcs tells beaconDB explicitly
+not to guess from your internet address. Your positions and places stay on the
+laptop (`data/`, never committed). To send nothing at all, add
+`TOWER_LOOKUP=off` to `.env` and restart: tower positions then aren't shown.
 
 ---
 
@@ -259,10 +321,16 @@ problems), and in **Control → Source health**.
 | **No internet link found** (Boost) | The laptop has no network with a gateway | Connect to the router or turn on USB tethering | Yes, run again once connected |
 | **No answers: no internet through this link** (Boost) | That connection reaches its router/phone, but nothing beyond it (no data, no credit, or the router lost its 4G connection) | Check the router's or phone's mobile data | n/a |
 | **Links are about equal** (Boost) | The best two connections are within a few ms | Nothing: switching won't be noticeable | n/a |
-| **Tower locations need an OpenCellID key** (Towers) | No `OPENCELLID_KEY` in `.env` | See 2.9 | n/a |
-| **Home location not set** (Towers) | No `HOME_LAT` / `HOME_LON` | Add them to `.env`, or press **Use this device's location** on the laptop | n/a |
-| **not in OpenCellID** (Towers) | Nobody has mapped that cell yet | Nothing; it is retried weekly | Maybe |
-| **lookup failed** (Towers) | No internet, wrong key, or daily limit reached; hover for the exact reason | Check the key | Retried every 10 min |
+| **not administrator** / **Switching needs administrator rights** (Boost) | rhcsd wasn't started as administrator, so it can't change which link Windows uses | Start rhcsd from an admin PowerShell (see 2.8) | n/a |
+| **only a little better … not worth switching** (Boost auto-switch) | Another link is faster, but not by enough to be worth a switch | Nothing | Yes |
+| **… is better, 2/3 checks in a row** (Boost auto-switch) | Waiting to be sure before switching | Nothing | Yes |
+| **the last switch was less than 2 minutes ago** (Boost auto-switch) | Holding back to avoid flipping between links | Nothing | Yes |
+| **Tower lookups are off** (Towers) | `TOWER_LOOKUP=off` in `.env` | Remove it to see tower positions | n/a |
+| **No position yet for distance and direction** (Towers) | No home set and no position from the phone | Connect the phone and turn on its Location, or set `HOME_LAT` / `HOME_LON`, or press **Use this device's location** | Yes, once the phone reports a position |
+| **phone position not available** (Log, Towers) | The phone isn't on ADB, its Location is off, or Termux:API has no Location permission | Plug in the phone / turn on Location / allow Termux:API | Yes, checked every 30 s |
+| **position unknown** (Towers) | Neither beaconDB nor OpenCellID knows that cell yet | Nothing; it is asked again weekly | Maybe |
+| **lookup failed** (Towers) | No internet, a wrong OpenCellID key, or a daily limit; hover for the exact reason | Check the connection or the key | Retried every 10 min |
+| **No radio readings for …** (Signal) | rhcs can't read the device behind that connection (phone not on ADB, router not answering, or an unknown network) | Follow the reason shown | Yes, once readable |
 | **Microphone access was blocked** | The browser refused the microphone | Allow the microphone for this site in browser settings | n/a |
 
 ### 4.2 Common situations
@@ -284,8 +352,10 @@ problems), and in **Control → Source health**.
 |---|---|
 | Check if my internet is good right now | **Signal**: look at the ring colours |
 | Find where to put the router | **Signal → Aim mode**, Tone on, move slowly, **Mark spot** |
-| Get the best ping for a game | **Boost → Run Game Boost**, follow the recommendation |
-| See which way the towers are | **Towers** (needs an OpenCellID key) |
+| Get the best ping for a game | **Boost → Run Game Boost**, then **Switch now** on the best card (rhcsd as administrator), or turn on **Auto-switch** |
+| Compare my connections | **Signal → Connections**: every connection by name with SINR, RSRP and ping |
+| Find the best place at home without marking spots | **Towers → Your spots → Best places (automatic)**: carry the phone around with Location on |
+| See which way the towers are | **Towers** (works without a key; Location on the phone gives the direction) |
 | Know the best time to play | **Boost → Best time of day** |
 | Know why it was slow last night | **Signal → Timeline → 24 h**, look for dips and handover markers |
 | See who's on my Wi-Fi or hotspot | **Network** (router) and **Phone → Hotspot clients** |
@@ -330,7 +400,12 @@ problems), and in **Control → Source health**.
 | **Jitter** | How much the ping changes from one moment to the next |
 | **Loss** | Messages that never got an answer |
 | **Link** | One of the laptop's internet connections (router Wi-Fi, phone USB, phone hotspot) |
-| **OpenCellID** | Free, open database of tower positions |
+| **OpenCellID** | Free, open database of tower positions (optional key) |
+| **beaconDB** | Free, open database of tower and Wi-Fi positions; rhcs asks it first, no key needed |
+| **Connection** | One of the laptop's ways to the internet, named after its Wi-Fi network or device, e.g. "Jeffnou (router)" |
+| **Auto-switch** | Game Boost moving new connections to a clearly better link by itself |
+| **Administrator** | Windows' full-rights mode; needed to change which link carries the internet |
+| **Place** | A spot found automatically from the phone's position, with the signal measured there |
 | **Bearing** | Direction in degrees, clockwise from north (90° = east) |
 | **MAC** | A device's hardware address |
 | **Stale** | No fresh reading for a few seconds |

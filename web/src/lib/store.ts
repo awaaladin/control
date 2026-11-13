@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DeviceView, Health, PhoneStatus, RhcsEvent, Settings, Sources, Telemetry } from './types';
+import type { DeviceView, Health, PhoneFix, PhoneStatus, RhcsEvent, Settings, Sources, Telemetry } from './types';
 import { loadPrefs, save, type Prefs } from './prefs';
 
 export type Conn = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'demo';
@@ -43,6 +43,11 @@ export interface PulseState {
   telemetryAt: number | null;
   phone: PhoneStatus | null;
   phoneAt: number | null;
+  /** The phone's latest position (drawn on the map only). */
+  fix: PhoneFix | null;
+  fixAt: number | null;
+  /** Connection shown on the Signal page (connection id); null = the one in use. */
+  signalConn: string | null;
   devices: DeviceView[];
   devicesAt: number | null;
   events: RhcsEvent[];
@@ -74,6 +79,9 @@ export const useStore = create<PulseState>()((set, get) => ({
   telemetryAt: null,
   phone: null,
   phoneAt: null,
+  fix: null,
+  fixAt: null,
+  signalConn: null,
   devices: [],
   devicesAt: null,
   events: [],
@@ -108,6 +116,8 @@ export const useStore = create<PulseState>()((set, get) => ({
       telemetryAt: null,
       phone: null,
       phoneAt: null,
+      fix: null,
+      fixAt: null,
       devices: [],
       devicesAt: null,
       events: [],

@@ -37,9 +37,26 @@ pub fn load() -> HashMap<String, String> {
         }
     }
     for (k, v) in std::env::vars() {
-        if map.contains_key(&k) || k.starts_with("ROUTER") || k.starts_with("RHCSD") {
+        if map.contains_key(&k) || is_rhcs_key(&k) {
             map.insert(k, v);
         }
     }
     map
+}
+
+/// Settings rhcs reads, so a real environment variable can set them even
+/// when `.env` doesn't mention them.
+fn is_rhcs_key(k: &str) -> bool {
+    const PREFIXES: &[&str] = &["ROUTER", "RHCSD", "PHONE_", "TOWER_", "HOME_", "OPENCELLID_", "BOOST_", "SCAN_", "ADB_"];
+    PREFIXES.iter().any(|p| k.starts_with(p))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rhcs_keys_from_environment() {
+        assert!(super::is_rhcs_key("TOWER_LOOKUP"));
+        assert!(super::is_rhcs_key("PHONE_HOTSPOT_SSID"));
+        assert!(!super::is_rhcs_key("PATH"));
+    }
 }

@@ -1,6 +1,6 @@
 // Typed rhcsd API client, WebSocket manager and live/demo orchestration.
 
-import { samples, sampleFromTelemetry } from './buffer';
+import { phoneSamples, samples, sampleFromTelemetry } from './buffer';
 import { useStore, toast, WINDOW_MS } from './store';
 import type {
   ActionResult,
@@ -164,8 +164,19 @@ function onTelemetry(ts: number, t: Telemetry) {
   set({ telemetry: t, telemetryAt: Date.now() });
   samples.push(sampleFromTelemetry(ts, t));
 }
-function onPhone(p: PhoneStatus) {
+function onPhone(ts: number, p: PhoneStatus) {
   set({ phone: p, phoneAt: Date.now() });
+  phoneSamples.push({
+    ts,
+    rsrp: p.rsrp,
+    rsrq: p.rsrq,
+    sinr: p.sinr,
+    rx_bytes_per_s: null,
+    tx_bytes_per_s: null,
+    pci: p.pci,
+    cell_id: p.cell_id,
+    band: p.band,
+  });
 }
 function onDevices(d: DeviceView[]) {
   set({ devices: Array.isArray(d) ? d : [], devicesAt: Date.now() });
@@ -185,7 +196,10 @@ export function dispatch(msg: WsMessage, live = true) {
       if (msg.data) onTelemetry(msg.ts, msg.data);
       break;
     case 'phone':
-      if (msg.data) onPhone(msg.data);
+      if (msg.data) onPhone(msg.ts, msg.data);
+      break;
+    case 'location':
+      if (msg.data) set({ fix: msg.data, fixAt: Date.now() });
       break;
     case 'devices':
       onDevices(msg.data);
@@ -325,6 +339,7 @@ export async function goLive(): Promise<void> {
   stopDemo();
   if (wasDemo) {
     samples.clear();
+    phoneSamples.clear();
     get().resetData();
   }
   skewInit = false;
@@ -334,6 +349,7 @@ export async function goLive(): Promise<void> {
   if (gen !== generation) return;
   if (base !== get().baseUrl) {
     samples.clear();
+    phoneSamples.clear();
     get().resetData();
   }
   set({ baseUrl: base });
@@ -359,6 +375,7 @@ export function enterDemo(reason: 'user' | 'fallback'): void {
   closeWs();
   stopDemo();
   samples.clear();
+    phoneSamples.clear();
   get().resetData();
   skew = 0;
   skewInit = true;

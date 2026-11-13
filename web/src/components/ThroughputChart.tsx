@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { samples } from '../lib/buffer';
+import { samples as routerSamples, type SampleBuffer } from '../lib/buffer';
 import {
   collect,
   drawCrosshair,
@@ -30,7 +30,8 @@ function niceMbps(v: number): number {
 }
 
 /** Mirrored area chart: download above the axis, upload below. */
-export function ThroughputChart({ height = 190 }: { height?: number }) {
+export function ThroughputChart({ height = 190, buffer }: { height?: number; buffer?: SampleBuffer }) {
+  const samples = buffer ?? routerSamples;
   const canvas = useRef<HTMLCanvasElement>(null);
   const { size, version } = useCanvasSize(canvas);
   const pointer = usePointer(canvas);
@@ -63,8 +64,8 @@ export function ThroughputChart({ height = 190 }: { height?: number }) {
     const t0 = t1 - windowMs;
     const p: Plot = { x: 56, y: 12, w: w - 64, h: h - 34 };
     const gapMs = Math.max(6000, msPerPx * 3);
-    const rx = collect('tp-rx', 'rx', t0, t1, p, gapMs, true);
-    const tx = collect('tp-tx', 'tx', t0, t1, p, gapMs, true);
+    const rx = collect('tp-rx', 'rx', t0, t1, p, gapMs, true, samples);
+    const tx = collect('tp-tx', 'tx', t0, t1, p, gapMs, true, samples);
     const peak = Math.max(Number.isFinite(rx.max) ? rx.max : 0, Number.isFinite(tx.max) ? tx.max : 0);
     const want = niceMbps(Math.max(0.1, (peak * 8) / 1e6) * 1.1);
     m.scale += (want - m.scale) * (smooth ? 1 - Math.exp(-dt * 4) : 1);

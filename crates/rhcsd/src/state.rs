@@ -40,6 +40,10 @@ pub struct Config {
     /// normalized MAC -> friendly label, from any `*_MAC=` entry in .env
     pub known_macs: HashMap<String, String>,
     pub web_dir: PathBuf,
+    /// Wi-Fi names of the routers (ROUTER_WIFI_SSID, ROUTER2_WIFI_SSID), for naming links.
+    pub router_ssids: Vec<String>,
+    /// Wi-Fi name(s) of the phone's hotspot (PHONE_HOTSPOT_SSID, comma separated).
+    pub phone_hotspot_ssids: Vec<String>,
 }
 
 impl Config {
@@ -82,6 +86,10 @@ impl Config {
             scan_interval_s: get("SCAN_INTERVAL_S").and_then(|s| s.parse().ok()).unwrap_or(300),
             known_macs,
             web_dir: rhcs_core::env::project_dir().join("web").join("dist"),
+            router_ssids: ["ROUTER_WIFI_SSID", "ROUTER2_WIFI_SSID"].iter().filter_map(|k| get(k)).collect(),
+            phone_hotspot_ssids: get("PHONE_HOTSPOT_SSID")
+                .map(|s| s.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -158,6 +166,8 @@ pub struct Sources {
     pub router: RouterState,
     pub phone: SourceState,
     pub scan: ScanState,
+    /// The phone's position (Termux:API or `adb shell dumpsys location`).
+    pub location: SourceState,
 }
 
 pub struct Inner {
@@ -182,6 +192,16 @@ pub struct AppState {
     pub boost: crate::boost::Boost,
     /// Towers seen, handovers, tower locations and home location (see towers.rs).
     pub towers: crate::towers::Towers,
+    /// The phone's latest position (see location.rs).
+    pub location: RwLock<Option<crate::location::Fix>>,
+    /// Places found automatically from positions + signal (see places.rs).
+    pub places: crate::places::Places,
+    /// Interface metrics changed by switching, for an exact restore (see switch.rs).
+    pub switch: crate::switch::Switcher,
+    /// rhcsd runs elevated (Windows administrator): switching links is possible.
+    pub admin: bool,
+    /// Wi-Fi names seen as the phone's hotspot this session.
+    pub learned_hotspot_ssids: RwLock<Vec<String>>,
 }
 
 impl AppState {
@@ -209,6 +229,11 @@ impl AppState {
             oui: OuiDb::load(),
             boost: crate::boost::Boost::new(),
             towers: crate::towers::Towers::new(),
+            location: RwLock::new(None),
+            places: crate::places::Places::new(),
+            switch: crate::switch::Switcher::new(),
+            admin: crate::switch::is_elevated(),
+            learned_hotspot_ssids: RwLock::new(Vec::new()),
         })
     }
 
@@ -247,6 +272,11 @@ impl AppState {
         if let Some(p) = &i.phone {
             out.push(json!({ "type": "phone", "ts": ts, "data": p }));
         }
+        drop(i);
+        if let Some(f) = &*self.location.read().await {
+            out.push(json!({ "type": "location", "ts": ts, "data": f }));
+        }
+        let i = self.inner.read().await;
         let skip = i.events.len().saturating_sub(50);
         out.extend(i.events.iter().skip(skip).cloned());
         out

@@ -59,4 +59,6 @@ export interface MarkedSpot {
   pci: number | null;
   cell_id: number | null;
   band: number | null;
+  /** Automatic place the phone was at when the spot was marked (if known). */
+  place_id?: number | null;
 }

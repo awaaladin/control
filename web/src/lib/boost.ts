@@ -77,6 +77,8 @@ export interface BoostLink {
   id: string;
   name: string;
   kind: LinkKind;
+  ssid?: string | null;
+  if_index?: number;
   medium: string;
   adapter: string;
   description: string;
@@ -124,6 +126,35 @@ export interface BoostState {
   links: BoostLink[];
   recommendation: BoostRecommendation | null;
   error: string | null;
+  /** rhcsd runs as administrator (switching possible). */
+  admin?: boolean;
+  auto?: AutoView;
+  switch?: SwitchStatus;
+}
+
+export interface AutoDecision {
+  ts: number;
+  action: 'stay' | 'wait' | 'hold' | 'switch' | 'error';
+  message: string;
+  to: string | null;
+  to_alias: string | null;
+}
+
+export interface AutoView {
+  enabled: boolean;
+  last: AutoDecision | null;
+  last_switch: number | null;
+}
+
+export interface SwitchStatus {
+  admin: boolean;
+  supported: boolean;
+  admin_help: string | null;
+  switched: boolean;
+  preferred: string | null;
+  touched: { alias: string; original: { automatic: boolean; metric: number } }[];
+  last_switch: number | null;
+  last_message: string | null;
 }
 
 export interface HourBucket {
@@ -174,6 +205,27 @@ export async function stopBoostWatch(): Promise<void> {
   void refreshBoost();
 }
 
+export async function setAutoSwitch(enabled: boolean): Promise<void> {
+  const a = await postJson<{ ok: boolean; message: string }>('/api/boost/auto', { enabled });
+  if (a.ok) toast('ok', enabled ? 'Auto-switch on' : 'Auto-switch off', a.message);
+  else if (a.status !== 401) toast('error', 'Could not change auto-switch', a.message, 12000);
+  void refreshBoost();
+}
+
+export async function switchLink(alias: string): Promise<void> {
+  const a = await postJson<{ ok: boolean; message: string }>('/api/links/switch', { alias });
+  if (a.ok) toast('ok', 'Switched', a.message, 8000);
+  else if (a.status !== 401) toast('error', 'Could not switch', a.message, 12000);
+  void refreshBoost();
+}
+
+export async function restoreLinks(): Promise<void> {
+  const a = await postJson<{ ok: boolean; message: string }>('/api/links/restore', {});
+  if (a.ok) toast('ok', 'Restored', a.message, 8000);
+  else if (a.status !== 401) toast('error', 'Could not restore', a.message, 12000);
+  void refreshBoost();
+}
+
 /** Polls /api/boost while mounted: fast while measuring, slow otherwise. */
 export function useBoostPolling(): void {
   const baseUrl = useStore((s) => s.baseUrl);
@@ -187,7 +239,7 @@ export function useBoostPolling(): void {
       if (!alive) return;
       const st = useBoost.getState().state;
       const busy = st?.running || st?.phase === 'measuring' || st?.watch;
-      timer = window.setTimeout(loop, busy ? 500 : 4000);
+      timer = window.setTimeout(loop, busy ? 500 : st?.auto?.enabled ? 2000 : 4000);
     };
     void loop();
     void refreshHourly();

@@ -11,7 +11,7 @@ export type Field = 'rsrp' | 'rsrq' | 'sinr' | 'rx' | 'tx' | 'pci' | 'cell' | 'b
 
 const nan = (v: number | null | undefined) => (isNum(v) ? v : NaN);
 
-class SampleBuffer {
+export class SampleBuffer {
   ts = new Float64Array(CAP);
   cols: Record<Field, Float64Array> = {
     rsrp: new Float64Array(CAP),
@@ -144,7 +144,11 @@ class SampleBuffer {
   }
 }
 
+/** Router readings (with history from the backend). */
 export const samples = new SampleBuffer();
+/** Phone readings, kept only in this browser from the live `phone` messages
+ *  (the backend keeps no phone history), so phone charts move too. */
+export const phoneSamples = new SampleBuffer();
 
 export function sampleFromTelemetry(ts: number, t: Telemetry): Sample {
   return {

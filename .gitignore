@@ -3,6 +3,10 @@
 # tower IDs and home location
 /data/towers.json
 /data/towers.json.tmp
+# positions of automatic places, and interface metrics changed by switching
+/data/places.json
+/data/places.json.tmp
+/data/switch.json
 *.log
 .env
 /logs

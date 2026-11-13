@@ -2,8 +2,11 @@ import { useState } from 'react';
 import { GlowRing } from '../components/GlowRing';
 import { Badge, Empty, Icon, KV, Panel, Switch } from '../components/ui';
 import {
+  restoreLinks,
   runBoost,
+  setAutoSwitch,
   stopBoostWatch,
+  switchLink,
   useBoost,
   useBoostPolling,
   type BoostLink,
@@ -11,7 +14,7 @@ import {
   type Hourly,
 } from '../lib/boost';
 import { fmt, fmtAgo, fmtRate, grade, type Grade, isNum } from '../lib/format';
-import { toast, useStore } from '../lib/store';
+import { confirmAction, toast, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import '../styles/extras.css';
 
@@ -84,7 +87,7 @@ function RunButton({ st, onRun }: { st: BoostState | null; onRun: () => void }) 
   );
 }
 
-function LinkCard({ l, best, busy }: { l: BoostLink; best: boolean; busy: boolean }) {
+function LinkCard({ l, best, busy, admin, supported }: { l: BoostLink; best: boolean; busy: boolean; admin: boolean; supported: boolean }) {
   const g = pingGrade(l.ping_ms);
   return (
     <Panel
@@ -159,6 +162,101 @@ function LinkCard({ l, best, busy }: { l: BoostLink; best: boolean; busy: boolea
             </tbody>
           </table>
         </details>
+      ) : null}
+      {supported && !l.is_default ? (
+        <div className="linkcard__switch">
+          <button
+            type="button"
+            className="btn btn--small"
+            disabled={!admin}
+            title={admin ? undefined : 'Start rhcsd as administrator to switch links (see above).'}
+            onClick={async () => {
+              const ok = await confirmAction({
+                title: `Switch to ${l.name}?`,
+                body: `New connections will go through ${l.name} (Windows interface "${l.adapter}" gets the lowest metric, the other links a high one). Your current game keeps its connection; new connections use the new link. Undo any time with "Restore automatic".`,
+                confirmLabel: 'Switch now',
+              });
+              if (ok) await switchLink(l.adapter);
+            }}
+          >
+            Switch now
+          </button>
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+/** Auto-switch toggle, restore button and admin status. */
+function SwitchPanel({ st }: { st: BoostState }) {
+  const now = useNow(5000);
+  const sw = st.switch;
+  const admin = st.admin ?? sw?.admin ?? false;
+  const supported = sw?.supported ?? true;
+  const auto = st.auto;
+  if (!supported) {
+    return (
+      <Panel kicker="Switching" title="Switching links isn't available here">
+        <p className="muted small">rhcsd can only change which link carries the internet on Windows. It still measures and recommends.</p>
+      </Panel>
+    );
+  }
+  return (
+    <Panel
+      kicker="Switching"
+      title="Use the best link automatically"
+      className="switchbar"
+      actions={admin ? <Badge tone="excellent">administrator</Badge> : <Badge tone="fair">not administrator</Badge>}
+    >
+      <div className="switchbar__row">
+        <Switch
+          checked={!!auto?.enabled}
+          disabled={!admin}
+          onChange={(on) => void setAutoSwitch(on)}
+          label="Auto-switch"
+        />
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={!admin || !sw?.switched}
+          onClick={async () => {
+            const ok = await confirmAction({
+              title: 'Restore automatic?',
+              body: 'Puts every link rhcs changed back exactly as it was, so Windows chooses again. Auto-switch turns off. Running connections are not cut.',
+              confirmLabel: 'Restore',
+            });
+            if (ok) await restoreLinks();
+          }}
+        >
+          Restore automatic
+        </button>
+        {sw?.switched && sw.preferred ? <span className="small">rhcs has set <strong>{sw.preferred}</strong> as the preferred link.</span> : null}
+      </div>
+      <p className="small">
+        Auto-switch keeps measuring gently (a few tiny connection tests per link every 12 s) and switches only when another link is clearly
+        better (at least 20 % and 15 ms) three times in a row, and never more than once every 2 minutes.{' '}
+        <strong>Your current game keeps its connection; new connections use the new link.</strong>
+      </p>
+      {auto?.last ? (
+        <p className={`switchbar__last small ${auto.last.action === 'switch' ? 'g-excellent' : auto.last.action === 'error' ? 'g-poor' : 'muted'}`}>
+          Last check {fmtAgo(auto.last.ts, now)}: {auto.last.message}
+        </p>
+      ) : null}
+      {sw?.last_message ? <p className="switchbar__last muted small">Last change: {sw.last_message}</p> : null}
+      {!admin ? (
+        <div className="adminhelp small">
+          <strong>Switching needs rhcsd to run as administrator.</strong> Measuring works without it.
+          <ol>
+            <li>In rhcsd's window press <strong>Ctrl+C</strong> to stop it.</li>
+            <li>Start menu → type <strong>PowerShell</strong> → right-click <strong>Windows PowerShell</strong> → <strong>Run as administrator</strong>.</li>
+            <li>
+              Run <code>cd D:\setup
+              Run <code>{'cd D:\\setup\\rhcs'}</code> then <code>{'.\\target\\debug\\rhcsd.exe'}</code>
+hcsd.exe</code>
+            </li>
+            <li>Reload this page: the switch and the "Switch now" buttons turn on.</li>
+          </ol>
+        </div>
       ) : null}
     </Panel>
   );
@@ -279,8 +377,8 @@ function Tips({ st }: { st: BoostState | null }) {
         </li>
       </ol>
       <p className="muted small">
-        What Game Boost cannot do: make the radio signal stronger, or change how your mobile operator routes traffic. It measures and
-        recommends; switching links is done by you with the command above.
+        What Game Boost cannot do: make the radio signal stronger, or change how your mobile operator routes traffic. Switching only
+        changes which link new connections use.
       </p>
     </Panel>
   );
@@ -349,18 +447,21 @@ export function BoostPage() {
             ping.
           </p>
           <p className="muted small">
-            It only measures and recommends. It cannot make the signal stronger. Targets: {st?.targets.join(', ') || '—'}
+            It measures and recommends; with rhcsd running as administrator it can also switch for you (below). It cannot make the
+            signal stronger. Targets: {st?.targets.join(', ') || '—'}
           </p>
           {st?.error ? <div className="boost-error g-poor">{st.error}</div> : null}
         </div>
       </div>
+
+      {st ? <SwitchPanel st={st} /> : null}
 
       {st?.phase === 'done' ? <Recommendation st={st} /> : null}
 
       {st && st.links.length ? (
         <div className="linkgrid">
           {st.links.map((l) => (
-            <LinkCard key={l.id} l={l} best={l.id === bestId} busy={busy} />
+            <LinkCard key={l.id} l={l} best={l.id === bestId} busy={busy} admin={st.admin ?? false} supported={st.switch?.supported ?? true} />
           ))}
         </div>
       ) : st && st.phase === 'idle' ? (

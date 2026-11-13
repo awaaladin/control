@@ -3,6 +3,8 @@ import { GlowRing } from '../components/GlowRing';
 import { SeriesChart } from '../components/SeriesChart';
 import { ThroughputChart } from '../components/ThroughputChart';
 import { Badge, ErrorExplain, Icon, KV, Panel, Segmented, Tween } from '../components/ui';
+import { phoneSamples } from '../lib/buffer';
+import { useConnections, useConnectionsPolling, type Connection } from '../lib/connections';
 import { explainError } from '../lib/explain';
 import {
   bandLabel,
@@ -27,12 +29,14 @@ import {
 import { ensureHistory } from '../lib/rhcs';
 import { isStale, STALE_MS, useStore, type WindowKey } from '../lib/store';
 import { useNow } from '../lib/ticker';
-import type { Telemetry } from '../lib/types';
+import type { PhoneStatus, Telemetry } from '../lib/types';
+import '../styles/extras.css';
 
 const telemetryStale = () => {
   const s = useStore.getState();
   return isStale(s.telemetryAt, STALE_MS.telemetry);
 };
+const phoneStale = () => isStale(useStore.getState().phoneAt, STALE_MS.phone);
 
 const WINDOWS: { value: WindowKey; label: string }[] = [
   { value: '1m', label: '1 min' },
@@ -72,7 +76,7 @@ function Bars({ n }: { n: number | null | undefined }) {
 export function TowerCard({ t }: { t: Telemetry | null }) {
   const cell = t?.cell_id;
   return (
-    <Panel title="Serving cell" kicker="Tower" className="tower">
+    <Panel title="Serving cell" kicker="Tower · router" className="tower">
       <div className="tower__hero">
         <div>
           <div className="tower__k">eNB</div>
@@ -107,7 +111,39 @@ export function TowerCard({ t }: { t: Telemetry | null }) {
   );
 }
 
-function ChartPanel({ metric, value }: { metric: Metric; value: number | null | undefined }) {
+/** The same card for the phone's own radio (fewer fields: phones report no session data). */
+function PhoneTowerCard({ p }: { p: PhoneStatus | null }) {
+  const cell = p?.cell_id;
+  return (
+    <Panel title="Serving cell" kicker="Tower · phone" className="tower">
+      <div className="tower__hero">
+        <div>
+          <div className="tower__k">eNB</div>
+          <div className="tower__enb num">{fmt(enb(cell))}</div>
+        </div>
+        <div>
+          <div className="tower__k">Sector</div>
+          <div className="tower__sector num">{fmt(sector(cell))}</div>
+        </div>
+        <div>
+          <div className="tower__k">PCI</div>
+          <div className="tower__sector num">{fmt(p?.pci)}</div>
+        </div>
+      </div>
+      <dl className="kvs">
+        <KV k="Band" v={bandLabel(p?.band)} />
+        <KV k="EARFCN" v={fmt(p?.earfcn)} />
+        <KV k="TAC" v={fmt(p?.tac)} />
+        <KV k="MCC / MNC" v={p?.mcc || p?.mnc ? `${str(p?.mcc)} / ${str(p?.mnc)}` : '—'} />
+        <KV k="Cell ID" v={fmt(cell)} />
+        <KV k="RSSI" v={isNum(p?.rssi) ? `${fmt(p?.rssi)} dBm` : '—'} />
+        <KV k="Phone" v={str(p?.model)} mono={false} />
+      </dl>
+    </Panel>
+  );
+}
+
+function ChartPanel({ metric, value, phone }: { metric: Metric; value: number | null | undefined; phone?: boolean }) {
   const g = grade(metric, value);
   return (
     <Panel
@@ -122,7 +158,7 @@ function ChartPanel({ metric, value }: { metric: Metric; value: number | null | 
         </span>
       }
     >
-      <SeriesChart metric={metric} />
+      {phone ? <SeriesChart metric={metric} buffer={phoneSamples} source="phone" /> : <SeriesChart metric={metric} />}
     </Panel>
   );
 }
@@ -154,16 +190,102 @@ function HandoverCards() {
   );
 }
 
+/** Live values of a connection's radio: from the WebSocket stores, which are fresher than the poll. */
+function radioOf(c: Connection | undefined, t: Telemetry | null, p: PhoneStatus | null) {
+  const src = c?.radio?.source ?? (c?.kind === 'phone' ? 'phone' : c?.kind === 'router' ? 'router' : c ? null : 'router');
+  if (src === 'router') return { src, rsrp: t?.rsrp, sinr: t?.sinr, rsrq: t?.rsrq };
+  if (src === 'phone') return { src, rsrp: p?.rsrp, sinr: p?.sinr, rsrq: p?.rsrq };
+  return { src: null, rsrp: null, sinr: null, rsrq: null };
+}
+
+/** Chips naming every connection; picks which one the page shows. */
+function ConnectionPicker({ list, selected, onPick }: { list: Connection[]; selected: string | null; onPick: (id: string) => void }) {
+  if (list.length === 0) return null;
+  return (
+    <div className="connpick" role="radiogroup" aria-label="Connection shown">
+      {list.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          role="radio"
+          aria-checked={selected === c.id}
+          className={`connpick__chip ${selected === c.id ? 'is-on' : ''}`}
+          onClick={() => onPick(c.id)}
+        >
+          <span className="connpick__name">{c.name}</span>
+          {c.in_use ? <span className="connpick__tag">in use</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** All connections side by side, by name: SINR, RSRP, ping. Best one highlighted. */
+function ConnectionsStrip({ list, best, t, p, onPick }: { list: Connection[]; best: string | null; t: Telemetry | null; p: PhoneStatus | null; onPick: (id: string) => void }) {
+  if (list.length < 1) return null;
+  return (
+    <Panel kicker="Every internet connection of this computer" title="Connections" className="connstrip">
+      <ul className="connstrip__list">
+        {list.map((c) => {
+          const r = radioOf(c, t, p);
+          return (
+            <li key={c.id} className={`connstrip__item ${c.id === best ? 'is-best' : ''}`}>
+              <button type="button" className="connstrip__name linkbtn" onClick={() => onPick(c.id)}>
+                {c.name}
+              </button>
+              <span className="connstrip__tags">
+                {c.id === best ? <Badge tone="excellent">best</Badge> : null}
+                {c.in_use ? <Badge tone="accent">in use</Badge> : null}
+              </span>
+              <span className="connstrip__v">
+                <span className="muted small">SINR </span>
+                <span className={`num g-${grade('sinr', r.sinr)}`}>{isNum(r.sinr) ? `${fmt(r.sinr, 1)} dB` : '—'}</span>
+              </span>
+              <span className="connstrip__v">
+                <span className="muted small">RSRP </span>
+                <span className={`num g-${grade('rsrp', r.rsrp)}`}>{isNum(r.rsrp) ? `${fmt(r.rsrp)} dBm` : '—'}</span>
+              </span>
+              <span className="connstrip__v">
+                <span className="muted small">ping </span>
+                <span className="num">{isNum(c.ping?.ping_ms) ? `${fmt(c.ping!.ping_ms)} ms` : '—'}</span>
+              </span>
+              {!c.radio && c.radio_note ? <span className="connstrip__note muted small">{c.radio_note}</span> : null}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="muted small">
+        SINR and RSRP come from the router or the phone behind each connection; ping from the last Game Boost measurement. "Best" is the
+        lowest Game Boost score, or the cleanest signal when nothing has been measured.
+      </p>
+    </Panel>
+  );
+}
+
 export function SignalPage() {
+  useConnectionsPolling(4000);
+  const conns = useConnections((s) => s.view);
   const t = useStore((s) => s.telemetry);
+  const p = useStore((s) => s.phone);
   const win = useStore((s) => s.window);
   const setWindow = useStore((s) => s.setWindow);
   const setAim = useStore((s) => s.setAim);
   const conn = useStore((s) => s.conn);
   const telemetryAt = useStore((s) => s.telemetryAt);
+  const phoneAt = useStore((s) => s.phoneAt);
   const routerSrc = useStore((s) => s.sources?.router);
+  const picked = useStore((s) => s.signalConn);
   const now = useNow(1000);
-  const stale = isStale(telemetryAt, STALE_MS.telemetry, now);
+
+  const list = conns?.connections ?? [];
+  const selected = list.find((c) => c.id === picked) ?? list.find((c) => c.in_use) ?? list.find((c) => c.kind === 'router') ?? list[0];
+  const pick = (id: string) => useStore.setState({ signalConn: id });
+  const r = radioOf(selected, t, p);
+  const isPhone = r.src === 'phone';
+  const isRouter = r.src === 'router';
+  const at = isPhone ? phoneAt : telemetryAt;
+  const stale = isStale(at, isPhone ? STALE_MS.phone : STALE_MS.telemetry, now);
+  const staleFn = isPhone ? phoneStale : telemetryStale;
 
   useEffect(() => {
     void ensureHistory();
@@ -174,14 +296,14 @@ export function SignalPage() {
       <header className="pagehead">
         <div>
           <div className="pagehead__kicker">
-            {t?.network_type ? `${t.network_type} · ` : ''}
-            {bandLabel(t?.band)} · PCI {fmt(t?.pci)}
+            {selected ? `${selected.name} · ` : ''}
+            {isPhone ? `${bandLabel(p?.band)} · PCI ${fmt(p?.pci)}` : isRouter ? `${t?.network_type ? `${t.network_type} · ` : ''}${bandLabel(t?.band)} · PCI ${fmt(t?.pci)}` : 'no radio data'}
           </div>
           <h1 className="pagehead__title">Signal</h1>
         </div>
         <div className="pagehead__actions">
-          {stale && conn !== 'connecting' ? (
-            <Badge tone="stale">{telemetryAt ? `no reading for ${fmtAgo(telemetryAt, now).replace(' ago', '')}` : 'waiting for first reading'}</Badge>
+          {r.src && stale && conn !== 'connecting' ? (
+            <Badge tone="stale">{at ? `no reading for ${fmtAgo(at, now).replace(' ago', '')}` : 'waiting for first reading'}</Badge>
           ) : null}
           <button type="button" className="btn btn--accent" onClick={() => setAim(true)}>
             <Icon name="aim" size={18} /> Aim mode
@@ -189,57 +311,75 @@ export function SignalPage() {
         </div>
       </header>
 
-      {routerSrc && !routerSrc.online && routerSrc.error && conn !== 'demo' ? (
+      <ConnectionPicker list={list} selected={selected?.id ?? null} onPick={pick} />
+
+      {isRouter && routerSrc && !routerSrc.online && routerSrc.error && conn !== 'demo' ? (
         <ErrorExplain e={explainError('router', routerSrc.error)} />
-      ) : routerSrc?.online && routerSrc.logged_in === false && routerSrc.error && conn !== 'demo' ? (
+      ) : isRouter && routerSrc?.online && routerSrc.logged_in === false && routerSrc.error && conn !== 'demo' ? (
         <ErrorExplain e={explainError('router', routerSrc.error)} />
+      ) : null}
+      {selected && !selected.radio && selected.radio_note && (!isPhone || !p) && !(isRouter && t) ? (
+        <p className="connnote muted">
+          No radio readings for <strong>{selected.name}</strong>: {selected.radio_note}.
+        </p>
       ) : null}
 
       <section className="rings" aria-label="Signal gauges">
-        <MetricRing metric="rsrp" value={t?.rsrp} />
-        <MetricRing metric="sinr" value={t?.sinr} />
-        <MetricRing metric="rsrq" value={t?.rsrq} />
+        <MetricRing metric="rsrp" value={r.rsrp} isStaleFn={staleFn} />
+        <MetricRing metric="sinr" value={r.sinr} isStaleFn={staleFn} />
+        <MetricRing metric="rsrq" value={r.rsrq} isStaleFn={staleFn} />
       </section>
 
-      <section className="rates" aria-label="Throughput now">
-        <div className="rate rate--down">
-          <span className="rate__k">Down</span>
-          <span className="rate__v">
-            <Tween value={mbps(t?.rx_bytes_per_s)} digits={2} /> <small>Mbit/s</small>
-          </span>
-        </div>
-        <div className="rate rate--up">
-          <span className="rate__k">Up</span>
-          <span className="rate__v">
-            <Tween value={mbps(t?.tx_bytes_per_s)} digits={2} /> <small>Mbit/s</small>
-          </span>
-        </div>
-        <div className="rate">
-          <span className="rate__k">Session</span>
-          <span className="rate__v num">{fmtDuration(t?.session_secs)}</span>
-        </div>
-        <div className="rate">
-          <span className="rate__k">Session data</span>
-          <span className="rate__v num">{fmtBytes(isNum(t?.session_rx_bytes) || isNum(t?.session_tx_bytes) ? (t?.session_rx_bytes ?? 0) + (t?.session_tx_bytes ?? 0) : null)}</span>
-        </div>
-      </section>
+      {isRouter ? (
+        <section className="rates" aria-label="Throughput now">
+          <div className="rate rate--down">
+            <span className="rate__k">Down</span>
+            <span className="rate__v">
+              <Tween value={mbps(t?.rx_bytes_per_s)} digits={2} /> <small>Mbit/s</small>
+            </span>
+          </div>
+          <div className="rate rate--up">
+            <span className="rate__k">Up</span>
+            <span className="rate__v">
+              <Tween value={mbps(t?.tx_bytes_per_s)} digits={2} /> <small>Mbit/s</small>
+            </span>
+          </div>
+          <div className="rate">
+            <span className="rate__k">Session</span>
+            <span className="rate__v num">{fmtDuration(t?.session_secs)}</span>
+          </div>
+          <div className="rate">
+            <span className="rate__k">Session data</span>
+            <span className="rate__v num">{fmtBytes(isNum(t?.session_rx_bytes) || isNum(t?.session_tx_bytes) ? (t?.session_rx_bytes ?? 0) + (t?.session_tx_bytes ?? 0) : null)}</span>
+          </div>
+        </section>
+      ) : selected ? (
+        <p className="connnote muted small">
+          Live throughput is only known for the router's connection (the router reports it). Ping for this connection:{' '}
+          {isNum(selected.ping?.ping_ms) ? `${fmt(selected.ping!.ping_ms)} ms (last Game Boost run)` : 'run Game Boost to measure it'}.
+        </p>
+      ) : null}
+
+      <ConnectionsStrip list={list} best={conns?.best ?? null} t={t} p={p} onPick={pick} />
 
       <div className="signal-grid">
         <div className="signal-grid__charts">
           <div className="charts-head">
-            <h2 className="section-title">Timeline</h2>
+            <h2 className="section-title">Timeline{isPhone ? ' · phone (since this page opened)' : ''}</h2>
             <Segmented label="Chart window" value={win} options={WINDOWS} onChange={setWindow} />
           </div>
-          <ChartPanel metric="rsrp" value={t?.rsrp} />
-          <ChartPanel metric="sinr" value={t?.sinr} />
-          <ChartPanel metric="rsrq" value={t?.rsrq} />
-          <Panel className="chartpanel" kicker="Router WAN" title="Throughput">
-            <ThroughputChart />
-          </Panel>
+          <ChartPanel metric="rsrp" value={r.rsrp} phone={isPhone} />
+          <ChartPanel metric="sinr" value={r.sinr} phone={isPhone} />
+          <ChartPanel metric="rsrq" value={r.rsrq} phone={isPhone} />
+          {isRouter ? (
+            <Panel className="chartpanel" kicker="Router WAN" title="Throughput">
+              <ThroughputChart />
+            </Panel>
+          ) : null}
         </div>
         <aside className="signal-grid__side">
-          <TowerCard t={t} />
-          <HandoverCards />
+          {isPhone ? <PhoneTowerCard p={p} /> : <TowerCard t={isRouter ? t : null} />}
+          {isRouter ? <HandoverCards /> : null}
         </aside>
       </div>
     </div>

@@ -110,9 +110,13 @@ A **crate** is a Rust package. A **workspace** groups several crates that build 
 | `phone.rs` | Polls the phone over ADB every 5 s (USB first, then Wi-Fi); hotspot join/leave events |
 | `scan_task.rs` | Scans every attached network every 5 min (or on demand); device join/leave events |
 | `api.rs` | HTTP routes, WebSocket, permissions, serves the PULSE build |
-| `links.rs` | Lists this machine's internet links (adapters that are up and have a gateway, via `GetAdaptersAddresses`) and names them "Router (Wi-Fi)", "Phone (USB)", "Phone (hotspot)" |
-| `boost.rs` | Game Boost: TCP-connect ping, jitter and loss per link, scoring, recommendation; also the hourly signal summary |
-| `towers.rs` | Cells seen by router and phone, time and signal on each, handovers, OpenCellID lookups, home location, distance/bearing maths. Saved in `data/towers.json` |
+| `links.rs` | Lists this machine's internet links (adapters that are up and have a gateway, via `GetAdaptersAddresses`) and names them by Wi-Fi name and device: "Jeffnou (router)", "vivo Y (phone hotspot)", "Phone (USB)" (SSIDs from `netsh wlan show interfaces`) |
+| `connections.rs` | `GET /api/connections`: every link as a named connection with the radio behind it (router or phone), throughput where known and the last Game Boost ping |
+| `boost.rs` | Game Boost: TCP-connect ping, jitter and loss per link, scoring, recommendation, auto-switch with hysteresis; also the hourly signal summary |
+| `switch.rs` | Administrator check, one-click link switching (interface metrics via `SetIpInterfaceEntry`) and exact restore. Remembers original metrics in `data/switch.json` |
+| `towers.rs` | Cells seen by router and phone, time and signal on each, handovers, tower positions from beaconDB then OpenCellID, home and current position, distance/bearing maths. Saved in `data/towers.json` |
+| `location.rs` | The phone's position every 30 s: `termux-location` on the phone hub, `adb shell dumpsys location` on the laptop |
+| `places.rs` | Automatic places: positions + router/phone signal clustered within ~15 m, ranked, described in words. Saved in `data/places.json` |
 
 ### 2.2 The dashboard (`web/`)
 
@@ -180,8 +184,10 @@ Copy `.env.example` to `.env` and fill it in. Everything private lives here.
 | `SCAN_INTERVAL_S` | Seconds between automatic scans (default 300) |
 | `ADB_PATH` | Path to `adb.exe` if it isn't found automatically |
 | `BOOST_TARGETS` | Game Boost test servers, `host:port` comma separated. Default `1.1.1.1:443,8.8.8.8:443,9.9.9.9:443,1.1.1.1:53,8.8.8.8:53` |
-| `OPENCELLID_KEY` | OpenCellID access token, for tower positions (optional; without it no positions are shown) |
-| `HOME_LAT`, `HOME_LON` | Home position in decimal degrees, for tower distance and direction (optional) |
+| `TOWER_LOOKUP` | `on` (default) or `off`. Off = no tower IDs are sent to any database, so no tower positions |
+| `OPENCELLID_KEY` | OpenCellID access token (optional). Asked only when beaconDB doesn't know a cell |
+| `HOME_LAT`, `HOME_LON` | Home position in decimal degrees (optional). Wins over the phone's position for "home" |
+| `PHONE_HOTSPOT_SSID` | Wi-Fi name(s) of the phone's hotspot, comma separated (optional). Names the laptop's Wi-Fi link "… (phone hotspot)" even when the phone isn't on ADB; while the phone is on ADB it's learned automatically |
 
 **Never commit `.env`.** It's in `.gitignore`. Tower IDs reveal your approximate location.
 
@@ -253,7 +259,7 @@ large amber **DEMO** badge, never mixed with live data.
 ### 5.3 The API (for PULSE, the Kotlin app, or your own scripts)
 | Method + path | Returns |
 |---|---|
-| `GET /api/health` | Version, uptime, capabilities, status of router/phone/scanner |
+| `GET /api/health` | Version, uptime, capabilities, `admin` (rhcsd elevated: switching possible), `switch_supported`, status of router/phone/scanner/location |
 | `GET /api/router/telemetry` | Latest router reading |
 | `GET /api/signal/history?minutes=60` | Router readings for the last N minutes (max 1440) |
 | `GET /api/devices` | Devices found on all networks |
@@ -265,11 +271,18 @@ large amber **DEMO** badge, never mixed with live data.
 | `GET /api/signal/hourly` | Router SINR, RSRP and download rate averaged per local hour of day, from the in-memory 24 h history: `{ hours: [{ hour, samples, avg_sinr, avg_rsrp, avg_rx_bps }] ×24, covered_h }` |
 | `POST /api/boost/run` `{"watch":false,"probes":20}` | Start a Game Boost measurement (both fields optional; `probes` 5-100; `watch: true` repeats every 10 s). Needs permission like other POSTs |
 | `POST /api/boost/stop` | Turn watch mode off (the current run finishes) |
-| `GET /api/boost` | Latest Game Boost state (shape below) |
-| `GET /api/towers` | Cells seen, handovers, home, best cell (shape below) |
+| `GET /api/boost` | Latest Game Boost state (shape below), plus `admin` and `switch` (same as `GET /api/links` without `links`) |
+| `POST /api/boost/auto` `{"enabled":true}` | Auto-switch on/off. On needs admin (403 with instructions otherwise) and Windows. Needs permission |
+| `GET /api/links` | `{ admin, supported, admin_help, switched, preferred, touched: [{ alias, original: { automatic, metric } }], last_switch, last_message, links: [Link] }` |
+| `POST /api/links/switch` `{"alias":"WiFi"}` | Make that interface the one new connections use: metric 10 (automatic off) on it, 500 on every other internet link. Admin + permission; 403 when not admin, 400 for an unknown alias |
+| `POST /api/links/restore` | Put every interface rhcs touched back exactly as it was (automatic or its old metric); also turns auto-switch off. Admin + permission |
+| `GET /api/connections` | Every internet connection by name (shape below), `best` (id), `admin`, `switch_supported` |
+| `GET /api/places` | Automatic places, ranked (shape below). No coordinates |
+| `POST /api/places/:id/name` `{"name":"Window"}` | Rename an automatic place (empty name clears it). Needs permission |
+| `GET /api/towers` | Cells seen, handovers, home, current position, best cell (shape below) |
 | `GET /api/location` | Home location or `null` |
-| `POST /api/location` `{"lat":..,"lon":..,"accuracy_m":..,"source":"phone"}` | Set the home location (plug-in point for phone GPS or a browser). Needs permission |
-| `GET /ws` | WebSocket: snapshot on connect, then live `status`, `telemetry`, `phone`, `devices`, `event`, `boost` messages |
+| `POST /api/location` `{"lat":..,"lon":..,"accuracy_m":..,"source":"browser"}` | Set the home location (e.g. from a browser). Needs permission |
+| `GET /ws` | WebSocket: snapshot on connect, then live `status`, `telemetry`, `phone`, `location`, `devices`, `event`, `boost` messages |
 
 #### Game Boost shape (`GET /api/boost`, and `data` of WebSocket `{ "type": "boost", "ts", "data" }`)
 Sent after every probe round while measuring, and once at the end.
@@ -280,7 +293,7 @@ Sent after every probe round while measuring, and once at the end.
   error,                        // e.g. no link found, targets unresolvable
   links: [{
     id, name, kind: "router"|"phone_usb"|"phone_hotspot"|"other", medium, adapter,
-    description, local_ip, gateway, metric, is_default,
+    description, local_ip, gateway, metric, is_default, if_index, ssid,
     sent, received, loss_pct, ping_ms, jitter_ms, best_ms, p90_ms,
     targets: [{ target, sent, received, refused, median_ms, jitter_ms }],
     radio: { source: "router"|"phone", rsrp, sinr } | null,
@@ -301,25 +314,86 @@ trip). Score (lower is better) = ping + 2×jitter + 10 ms per 1 % loss + up to
 in a row is reported as having no internet. On Linux/Android only the default
 route is measured.
 
+#### Auto-switch (`auto` in the Game Boost state)
+```
+auto: { enabled, last_switch,
+        last: { ts, action: "stay"|"wait"|"hold"|"switch"|"error", message, to, to_alias } | null }
+```
+While enabled, rhcsd measures every link with 5 probes every 12 s (skipped
+while a manual run is going). It switches only when another link's score is
+at least 15 ms **and** 20 % lower than the link in use, three measurements in
+a row, and never within 2 minutes of the previous switch; a link in use with
+no answers counts as beaten. Each switch is an `event` of kind `link_switch`
+("switched to Phone (USB): 41 ms vs 88 ms"). Switching changes interface
+metrics only: existing sockets (a running game) keep their link, new
+connections take the new one.
+
+#### Connections shape (`GET /api/connections`)
+```
+{ connections: [{ id, name, kind: "router"|"phone"|"other", link_kind, alias, ssid, medium,
+                  in_use,                                   // carries the default route
+                  radio: { source: "router"|"phone", rsrp, rsrq, sinr, rssi, band, earfcn,
+                           pci, cell_id, enb, sector, tower, network_type } | null,
+                  radio_note,                               // why there is no radio, in words
+                  throughput: { rx_bps, tx_bps, source: "router WAN" } | null,
+                  ping: { ping_ms, jitter_ms, loss_pct, score, grade, at } | null }],
+  best, admin, switch_supported }
+```
+A router-kind link gets the router's telemetry, a phone USB / hotspot link the
+phone's own radio (only while it is readable over ADB, or on the phone hub).
+`tower` is the cell key used by `/api/towers`. On the phone hub the phone's own
+mobile data appears as `"This phone (mobile data)"` (id `phone-self`).
+
+#### Places shape (`GET /api/places`)
+```
+{ home: "manual"|"most_visited"|"none", current_place,
+  places: [{ id, rank, label, name, where,            // where: "about 20 m north-east of home"
+             distance_m, compass, samples, quality_sinr, accuracy_m, first_seen, last_seen, is_current,
+             router: { samples, avg_sinr, best_sinr, avg_rsrp, best_rsrp } | null,
+             phone:  { …same… } | null }],
+  position: { provider, via, accuracy_m, age_s, fresh } | null, position_error }
+```
+Every 30 s the phone's position is read (`termux-location -p network -r last`,
+then `-p gps`; or `adb shell "cat /proc/uptime; dumpsys location"`, newest
+last-known fused/gps/network fix, age = uptime − `et`). A fix up to 10 min old
+becomes the "current position"; up to 5 min old it is a place sample with the
+router's and phone's SINR/RSRP at that moment. A sample joins the nearest place
+within max(15 m, its accuracy) (at most 40 m); otherwise it starts a new place
+if its accuracy is 50 m or better. Ranked by router average SINR (phone if
+there is no router reading). "Home" is `HOME_LAT/HOME_LON` (or a browser) if
+set, else the most-visited place. In PULSE an auto place takes the name of an
+Aim-mode spot marked while the phone was there, unless renamed.
+
 #### Towers shape (`GET /api/towers`)
 ```
-{ key_configured, message,      // message explains a missing key or home
-  home: { lat, lon, accuracy_m, source, ts } | null,
+{ key_configured,               // an OpenCellID key is set (not needed: beaconDB has no key)
+  lookup: { enabled, sources: ["beacondb", "opencellid"?] },
+  message,                      // explains lookups off or a missing position
+  home: { lat, lon, accuracy_m, source, ts } | null,   // origin of distances: manual home, else the phone's position
+  home_manual,                  // true = home is HOME_LAT/HOME_LON or a browser; false = the phone's position
+  current: { lat, lon, accuracy_m, source: "phone", ts } | null,
   serving: { router: key|null, phone: key|null },
   cells: [{ key, mcc, mnc, tac, cell_id, enb, sector, pci, bands, earfcn,
             first_seen, last_seen, seen_by: ["router","phone"], serving: […],
             router: { first_seen, last_seen, secs, samples, best_rsrp, avg_rsrp, best_sinr, avg_sinr } | null,
             phone:  { …same… } | null,
-            location: { lat, lon, range_m, samples, source: "opencellid" } | null,
-            lookup: { status: "no_key"|"incomplete"|"pending"|"found"|"not_found"|"error", at, message },
+            location: { lat, lon, range_m, samples, source: "beacondb"|"opencellid" } | null,
+            lookup: { status: "off"|"incomplete"|"pending"|"found"|"not_found"|"error", at, message },
             distance_m, bearing_deg, compass }],
   handovers: [{ ts, source, from: { key, cell_id, pci, band }, to: {…}, stayed_s }],   // newest first, max 300
   best: { key, avg_sinr, message } | null }
 ```
 Cells are followed from the `telemetry` and `phone` WebSocket messages (router
-TAC is hex text, phone TAC a number; both are stored as numbers). OpenCellID is
-asked about one cell every 5 s at most, using `curl`; "not found" is retried
-after 7 days, errors after 10 minutes. `data/towers.json` holds tower IDs and
+TAC is hex text, phone TAC a number; both are stored as numbers). One cell is
+looked up every 5 s at most, using `curl`: first beaconDB (`POST
+https://api.beacondb.net/v1/geolocate` with `{"considerIp": false, "cellTowers":
+[{"radioType": "lte", "mobileCountryCode", "mobileNetworkCode",
+"locationAreaCode", "cellId"}]}` and a `rhcs/0.1` User-Agent; HTTP 404 = not
+known; an answer with a `fallback` field is an area/IP guess and is not used),
+then OpenCellID if `OPENCELLID_KEY` is set and beaconDB had nothing. Only tower
+IDs leave the machine; `considerIp: false` stops beaconDB guessing from the
+internet address. "Not found" is retried after 7 days, errors after 10 minutes.
+`TOWER_LOOKUP=off` disables all of it. `data/towers.json` holds tower IDs and
 the home location and is git-ignored.
 
 ---

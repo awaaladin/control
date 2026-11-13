@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { samples } from '../lib/buffer';
+import { samples as routerSamples, type SampleBuffer } from '../lib/buffer';
 import {
   collect,
   drawCrosshair,
@@ -37,10 +37,15 @@ import { usePointer } from './usePointer';
 interface Props {
   metric: Metric;
   height?: number;
+  /** Which readings to draw (default: the router's). */
+  buffer?: SampleBuffer;
+  /** Whose freshness decides the "stale" look. */
+  source?: 'router' | 'phone';
 }
 
 /** Live scrolling line chart for one signal metric, drawn on canvas each frame. */
-export function SeriesChart({ metric, height = 170 }: Props) {
+export function SeriesChart({ metric, height = 170, buffer, source = 'router' }: Props) {
+  const samples = buffer ?? routerSamples;
   const canvas = useRef<HTMLCanvasElement>(null);
   const { size, version } = useCanvasSize(canvas);
   const pointer = usePointer(canvas);
@@ -78,7 +83,7 @@ export function SeriesChart({ metric, height = 170 }: Props) {
     const t0 = t1 - windowMs;
     const p: Plot = { x: 40, y: 12, w: w - 48, h: h - 34 };
     const gapMs = Math.max(6000, msPerPx * 3);
-    const ser = collect(`s-${metric}`, metric, t0, t1, p, gapMs);
+    const ser = collect(`s-${source}-${metric}`, metric, t0, t1, p, gapMs, false, samples);
 
     // Domain: the metric's nominal range, widened to fit the data, tweened.
     const [r0, r1] = RANGES[metric];
@@ -191,7 +196,7 @@ export function SeriesChart({ metric, height = 170 }: Props) {
 
     // Live head.
     const last = samples.len - 1;
-    const stale = s.conn !== 'demo' && isStale(s.telemetryAt, STALE_MS.telemetry);
+    const stale = s.conn !== 'demo' && (source === 'phone' ? isStale(s.phoneAt, STALE_MS.phone) : isStale(s.telemetryAt, STALE_MS.telemetry));
     if (last >= 0 && samples.ts[last] >= t0) {
       const v = samples.cols[metric][last];
       if (!Number.isNaN(v)) {

@@ -6,6 +6,7 @@ import { load, save, type MarkedSpot } from '../lib/prefs';
 import { PitchTone } from '../lib/sound';
 import { isStale, STALE_MS, toast, useStore } from '../lib/store';
 import { useTick } from '../lib/ticker';
+import { refreshPlaces, usePlaces } from '../lib/towers';
 
 const stale = () => isStale(useStore.getState().telemetryAt, STALE_MS.telemetry);
 
@@ -27,6 +28,11 @@ export function AimMode() {
     if (!aim) return;
     if (isNum(t?.sinr) && (best === null || t!.sinr! > best)) setBest(t!.sinr!);
   }, [aim, t, best]);
+
+  // Know which automatic place the phone is at, so a marked spot can name it.
+  useEffect(() => {
+    if (aim) void refreshPlaces();
+  }, [aim]);
 
   useEffect(() => {
     if (!aim) {
@@ -89,6 +95,7 @@ export function AimMode() {
       pci: t?.pci ?? null,
       cell_id: t?.cell_id ?? null,
       band: t?.band ?? null,
+      place_id: usePlaces.getState().view?.current_place ?? null,
     };
     const next = [spot, ...spots].slice(0, 40);
     setSpots(next);

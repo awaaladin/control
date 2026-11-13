@@ -1,8 +1,10 @@
 //! Game Boost: measures every internet link of this machine (TCP connect time,
 //! jitter, loss) and recommends the one with the lowest, steadiest ping.
 //!
-//! It only measures and recommends. Switching the default link needs admin
-//! rights, so the recommendation carries the exact command for the user to run.
+//! Switching the default link needs admin rights (switch.rs): with rhcsd
+//! elevated, PULSE switches in one click, and Auto mode keeps measuring
+//! gently and switches by itself when another link is clearly and steadily
+//! better. Without admin, the recommendation carries the command to run.
 //! It cannot make the radio signal stronger.
 //!
 //! No ICMP (that needs admin): a probe is one TCP handshake to a target,
@@ -31,6 +33,20 @@ pub const WATCH_GAP: Duration = Duration::from_secs(10);
 /// Stop measuring a link after this many rounds in a row with no answer.
 const DEAD_ROUNDS: usize = 4;
 const RECENT_MAX: usize = 60;
+
+// Auto-switch: gentle measuring and hysteresis so it never flaps.
+/// Probes per link in one auto measurement (about 1 s of tiny TCP connects).
+pub const AUTO_PROBES: u32 = 5;
+/// Pause between auto measurements.
+pub const AUTO_GAP: Duration = Duration::from_secs(12);
+/// Rounds in a row another link must be clearly better before switching.
+pub const AUTO_ROUNDS: u32 = 3;
+/// "Clearly better": at least this much lower score (ms) …
+pub const AUTO_MARGIN_MS: f64 = 15.0;
+/// … and at least this fraction lower.
+pub const AUTO_MARGIN_PCT: f64 = 0.20;
+/// Never switch more often than this.
+pub const AUTO_MIN_GAP_MS: i64 = 120_000;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct TargetStat {
@@ -96,6 +112,33 @@ pub struct Recommendation {
     pub commands: Vec<String>,
 }
 
+/// One auto-switch decision, kept for the UI.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Decision {
+    pub ts: i64,
+    /// stay | wait | hold | switch | error
+    pub action: String,
+    pub message: String,
+    /// Link id (local address) switched to / favoured.
+    pub to: Option<String>,
+    pub to_alias: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct AutoView {
+    pub enabled: bool,
+    pub last: Option<Decision>,
+    pub last_switch: Option<i64>,
+}
+
+/// Hysteresis memory for auto-switch.
+#[derive(Clone, Debug, Default)]
+pub struct AutoMemory {
+    pub streak_id: Option<String>,
+    pub streak: u32,
+    pub last_switch: Option<i64>,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct BoostState {
     /// idle | measuring | done | error
@@ -111,12 +154,16 @@ pub struct BoostState {
     pub links: Vec<LinkResult>,
     pub recommendation: Option<Recommendation>,
     pub error: Option<String>,
+    pub auto: AutoView,
 }
 
 pub struct Boost {
     pub state: RwLock<BoostState>,
     running: AtomicBool,
     watch: AtomicBool,
+    auto: AtomicBool,
+    auto_task: AtomicBool,
+    auto_mem: tokio::sync::Mutex<AutoMemory>,
     targets: Vec<String>,
 }
 
@@ -136,6 +183,9 @@ impl Boost {
             }),
             running: AtomicBool::new(false),
             watch: AtomicBool::new(false),
+            auto: AtomicBool::new(false),
+            auto_task: AtomicBool::new(false),
+            auto_mem: tokio::sync::Mutex::new(AutoMemory::default()),
             targets,
         }
     }
@@ -357,6 +407,76 @@ pub fn recommend(results: &[LinkResult]) -> Option<Recommendation> {
     })
 }
 
+/// Auto-switch decision after one measurement (pure, unit-tested). Switches
+/// only when another link beats the one in use by ≥ 15 ms and ≥ 20 % score
+/// for 3 measurements in a row, and not within 2 minutes of the last switch.
+pub fn decide(mem: &mut AutoMemory, results: &[LinkResult], now: i64) -> Decision {
+    let d = |action: &str, message: String, to: Option<&LinkResult>| Decision {
+        ts: now,
+        action: action.into(),
+        message,
+        to: to.map(|r| r.link.id.clone()),
+        to_alias: to.map(|r| r.link.adapter.clone()),
+    };
+    let best = results
+        .iter()
+        .filter(|r| r.score.is_some())
+        .min_by(|a, b| a.score.unwrap_or(f64::MAX).total_cmp(&b.score.unwrap_or(f64::MAX)));
+    let Some(best) = best else {
+        mem.streak = 0;
+        mem.streak_id = None;
+        return d("stay", "No link answered: nothing to switch to.".into(), None);
+    };
+    let Some(cur) = results.iter().find(|r| r.link.is_default) else {
+        mem.streak = 0;
+        mem.streak_id = None;
+        return d("stay", "Can't tell which link Windows is using right now; not switching.".into(), None);
+    };
+    if cur.link.id == best.link.id {
+        mem.streak = 0;
+        mem.streak_id = None;
+        return d("stay", format!("{} is in use and is the best link ({}).", cur.link.name, ms(cur.stats.ping_ms)), None);
+    }
+    let bs = best.score.unwrap_or(f64::MAX);
+    let clearly = match cur.score {
+        None => true, // the link in use has no internet
+        Some(cs) => cs - bs >= AUTO_MARGIN_MS && bs <= cs * (1.0 - AUTO_MARGIN_PCT),
+    };
+    if !clearly {
+        mem.streak = 0;
+        mem.streak_id = None;
+        return d(
+            "stay",
+            format!(
+                "{} ({}) is only a little better than {} ({}): not worth switching.",
+                best.link.name,
+                ms(best.stats.ping_ms),
+                cur.link.name,
+                ms(cur.stats.ping_ms)
+            ),
+            None,
+        );
+    }
+    if mem.streak_id.as_deref() == Some(best.link.id.as_str()) {
+        mem.streak += 1;
+    } else {
+        mem.streak_id = Some(best.link.id.clone());
+        mem.streak = 1;
+    }
+    let vs = format!("{} vs {}", ms(best.stats.ping_ms), if cur.score.is_some() { ms(cur.stats.ping_ms) } else { "no answer".into() });
+    if mem.streak < AUTO_ROUNDS {
+        return d("wait", format!("{} is better ({vs}), {}/{} checks in a row.", best.link.name, mem.streak, AUTO_ROUNDS), Some(best));
+    }
+    if let Some(last) = mem.last_switch.filter(|t| now - t < AUTO_MIN_GAP_MS) {
+        let left = (AUTO_MIN_GAP_MS - (now - last)) / 1000;
+        return d("hold", format!("{} is better ({vs}), but the last switch was less than 2 minutes ago ({left} s to wait).", best.link.name), Some(best));
+    }
+    mem.last_switch = Some(now);
+    mem.streak = 0;
+    mem.streak_id = None;
+    d("switch", format!("switched to {}: {vs}", best.link.name), Some(best))
+}
+
 // ------------------------------------------------------------------ measuring
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -398,20 +518,6 @@ fn radio_for(link: &Link, i: &crate::state::Inner) -> Option<Radio> {
     }
 }
 
-async fn discover(s: &Shared) -> Vec<Link> {
-    let router_ip = s.cfg.router_ip.parse().ok();
-    let hotspot: Vec<Ipv4Addr> = s
-        .inner
-        .read()
-        .await
-        .phone
-        .as_ref()
-        .map(|p| p.hotspot_clients.iter().filter_map(|c| c.ip.parse().ok()).collect())
-        .unwrap_or_default();
-    let adapters = tokio::task::spawn_blocking(links::adapters).await.unwrap_or_default();
-    let default_ip = netscan::net::local_ip().ok();
-    links::classify(&adapters, router_ip, &hotspot, default_ip)
-}
 
 fn result_for(link: &Link, rounds: &[Vec<Probe>], targets: &[String], radio: Option<Radio>, error: Option<String>) -> LinkResult {
     let rtts: Vec<Vec<Option<f64>>> = rounds
@@ -452,8 +558,10 @@ fn result_for(link: &Link, rounds: &[Vec<Probe>], targets: &[String], radio: Opt
 }
 
 async fn publish(s: &Shared) {
-    let st = s.boost.state.read().await.clone();
-    s.send(json!({ "type": "boost", "ts": now_ms(), "data": st }));
+    let mut v = json!(*s.boost.state.read().await);
+    v["running"] = json!(s.boost.running.load(Ordering::SeqCst));
+    v["admin"] = json!(s.admin);
+    s.send(json!({ "type": "boost", "ts": now_ms(), "data": v }));
 }
 
 async fn measure_link(s: Shared, idx: usize, link: Link, addrs: Vec<Option<SocketAddr>>, names: Vec<String>, probes: u32) {
@@ -500,7 +608,7 @@ async fn measure_link(s: Shared, idx: usize, link: Link, addrs: Vec<Option<Socke
 /// One full measurement of every link. Assumes `running` is held.
 async fn run_once(s: &Shared, probes: u32) {
     let targets = s.boost.targets.clone();
-    let links = discover(s).await;
+    let links = links::discover(s).await;
     let mut addrs = Vec::new();
     for t in &targets {
         addrs.push(resolve(t).await);
@@ -577,6 +685,64 @@ pub fn start(s: &Shared, probes: u32, watch: bool) -> bool {
     true
 }
 
+/// Turns auto-switch on or off. On starts the gentle measuring loop.
+pub async fn set_auto(s: &Shared, on: bool) {
+    s.boost.auto.store(on, Ordering::SeqCst);
+    s.boost.state.write().await.auto.enabled = on;
+    if on && s.boost.auto_task.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        let s = s.clone();
+        tokio::spawn(async move {
+            auto_loop(&s).await;
+            s.boost.auto_task.store(false, Ordering::SeqCst);
+        });
+    }
+    publish(s).await;
+}
+
+async fn auto_loop(s: &Shared) {
+    while s.boost.auto.load(Ordering::SeqCst) {
+        // A manual run (or watch) in progress already measures; skip this turn.
+        if s.boost.running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            run_once(s, AUTO_PROBES).await;
+            s.boost.running.store(false, Ordering::SeqCst);
+            if !s.boost.auto.load(Ordering::SeqCst) {
+                break;
+            }
+            let results = s.boost.state.read().await.links.clone();
+            let mut decision = {
+                let mut mem = s.boost.auto_mem.lock().await;
+                decide(&mut mem, &results, now_ms())
+            };
+            if decision.action == "switch" {
+                let alias = decision.to_alias.clone().unwrap_or_default();
+                match crate::switch::switch_to(s, &alias).await {
+                    Ok(_) => {
+                        s.event("link_switch", decision.message.clone(), json!({ "alias": alias, "auto": true })).await;
+                        s.boost.state.write().await.auto.last_switch = Some(decision.ts);
+                    }
+                    Err(e) => {
+                        decision.action = "error".into();
+                        decision.message = format!("could not switch: {e}");
+                        s.event("error", format!("auto-switch: {e}"), json!({})).await;
+                        if !s.admin {
+                            s.boost.auto.store(false, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+            {
+                let mut st = s.boost.state.write().await;
+                st.auto.enabled = s.boost.auto.load(Ordering::SeqCst);
+                st.auto.last = Some(decision);
+            }
+            publish(s).await;
+        }
+        tokio::time::sleep(AUTO_GAP).await;
+    }
+    s.boost.state.write().await.auto.enabled = false;
+    publish(s).await;
+}
+
 // ------------------------------------------------------------------ API
 
 pub fn routes() -> Router<Shared> {
@@ -584,7 +750,45 @@ pub fn routes() -> Router<Shared> {
         .route("/api/boost", get(get_boost))
         .route("/api/boost/run", post(run))
         .route("/api/boost/stop", post(stop))
+        .route("/api/boost/auto", post(auto))
         .route("/api/signal/hourly", get(hourly))
+}
+
+#[derive(Deserialize)]
+struct AutoRequest {
+    enabled: bool,
+}
+
+async fn auto(
+    State(s): State<Shared>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<AutoRequest>,
+) -> Response {
+    if !crate::api::authorized(&s, addr, &headers) {
+        return crate::api::denied();
+    }
+    if req.enabled && !crate::switch::supported() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "message": "auto-switch is only supported on Windows", "admin": s.admin })),
+        )
+            .into_response();
+    }
+    if req.enabled && !s.admin {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({ "ok": false, "message": crate::switch::ADMIN_HELP, "admin": false })),
+        )
+            .into_response();
+    }
+    set_auto(&s, req.enabled).await;
+    let message = if req.enabled {
+        "auto-switch on: measuring every 12 s, switching only when another link is clearly better 3 times in a row"
+    } else {
+        "auto-switch off"
+    };
+    Json(json!({ "ok": true, "message": message })).into_response()
 }
 
 /// Router signal history (`ts`, SINR, RSRP, download B/s) averaged per local
@@ -634,6 +838,8 @@ async fn hourly(State(s): State<Shared>) -> Json<Value> {
 async fn get_boost(State(s): State<Shared>) -> Json<Value> {
     let mut v = json!(*s.boost.state.read().await);
     v["running"] = json!(s.boost.running.load(Ordering::SeqCst));
+    v["admin"] = json!(s.admin);
+    v["switch"] = crate::switch::status(&s).await;
     Json(v)
 }
 
@@ -688,6 +894,8 @@ mod tests {
             gateway: Some("10.9.9.1".parse().unwrap()),
             metric: Some(25),
             is_default: default,
+            if_index: 3,
+            ssid: None,
         }
     }
 
@@ -812,6 +1020,52 @@ mod tests {
         assert!(!r.already_default);
         assert!(!r.close_call);
         assert_eq!(r.commands, vec!["powershell -ExecutionPolicy Bypass -File scripts\\lan-only.ps1 -Interface \"Wi-Fi\""]);
+    }
+
+    #[test]
+    fn auto_switch_hysteresis() {
+        let slow = |default| res(link("Router (Wi-Fi)", "10.1.0.5", default, "WiFi"), 88.0, 5.0, 0.0);
+        let fast = |default| res(link("Phone (USB)", "10.2.0.5", default, "Ethernet 2"), 41.0, 3.0, 0.0);
+        let mut mem = AutoMemory::default();
+        let t0 = 1_000_000;
+        // Better 3 rounds in a row: wait, wait, switch.
+        assert_eq!(decide(&mut mem, &[slow(true), fast(false)], t0).action, "wait");
+        assert_eq!(decide(&mut mem, &[slow(true), fast(false)], t0 + 12_000).action, "wait");
+        let d = decide(&mut mem, &[slow(true), fast(false)], t0 + 24_000);
+        assert_eq!(d.action, "switch");
+        assert_eq!(d.message, "switched to Phone (USB): 41 ms vs 88 ms");
+        assert_eq!(d.to_alias.as_deref(), Some("Ethernet 2"));
+
+        // Already on the best link: stay, streak cleared.
+        assert_eq!(decide(&mut mem, &[slow(false), fast(true)], t0 + 36_000).action, "stay");
+
+        // The other link becomes clearly better again right away: no flapping
+        // within 2 minutes of the last switch, even after 3 rounds.
+        let worse_fast = |default| res(link("Phone (USB)", "10.2.0.5", default, "Ethernet 2"), 120.0, 9.0, 0.0);
+        let good_slow = |default| res(link("Router (Wi-Fi)", "10.1.0.5", default, "WiFi"), 40.0, 3.0, 0.0);
+        for i in 0..2 {
+            assert_eq!(decide(&mut mem, &[good_slow(false), worse_fast(true)], t0 + 48_000 + i * 12_000).action, "wait");
+        }
+        assert_eq!(decide(&mut mem, &[good_slow(false), worse_fast(true)], t0 + 72_000).action, "hold");
+        assert_eq!(decide(&mut mem, &[good_slow(false), worse_fast(true)], t0 + 24_000 + AUTO_MIN_GAP_MS).action, "switch");
+
+        // A small edge (≥15 ms but < 20 %, or ≥ 20 % but < 15 ms) never switches and resets the streak.
+        let mut mem = AutoMemory::default();
+        let a = res(link("A", "10.1.0.5", true, "WiFi"), 100.0, 0.0, 0.0);
+        let b = res(link("B", "10.2.0.5", false, "Ethernet 2"), 84.0, 0.0, 0.0);
+        assert_eq!(decide(&mut mem, &[a, b], 0).action, "stay");
+        let a = res(link("A", "10.1.0.5", true, "WiFi"), 40.0, 0.0, 0.0);
+        let b = res(link("B", "10.2.0.5", false, "Ethernet 2"), 28.0, 0.0, 0.0);
+        assert_eq!(decide(&mut mem, &[a, b], 0).action, "stay");
+        assert_eq!(mem.streak, 0);
+
+        // The link in use has no internet: any answering link is clearly better.
+        let mut dead = slow(true);
+        dead.score = None;
+        let mut mem = AutoMemory::default();
+        let d = decide(&mut mem, &[dead, fast(false)], 0);
+        assert_eq!(d.action, "wait");
+        assert!(d.message.contains("no answer"));
     }
 
     #[test]

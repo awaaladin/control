@@ -55,7 +55,7 @@ pub struct PhoneStatus {
     pub hotspot_clients: Vec<HotspotClient>,
 }
 
-async fn adb(cfg: &Config, target: Option<&str>, args: &[&str]) -> Result<String> {
+pub(crate) async fn adb(cfg: &Config, target: Option<&str>, args: &[&str]) -> Result<String> {
     let mut cmd = tokio::process::Command::new(&cfg.adb_path);
     if let Some(t) = target {
         cmd.args(["-s", t]);
@@ -210,7 +210,7 @@ pub fn in_termux() -> bool {
     cfg!(target_os = "linux") && std::env::var("PREFIX").map(|p| p.contains("com.termux")).unwrap_or(false)
 }
 
-async fn local(cmd: &str, args: &[&str]) -> Result<String> {
+pub(crate) async fn local(cmd: &str, args: &[&str]) -> Result<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(15),
         tokio::process::Command::new(cmd).args(args).kill_on_drop(true).output(),

@@ -1,13 +1,18 @@
 //! Tower map: every LTE cell the router or the phone has been served by, how
-//! long and how well, the handovers between them, and (with an OpenCellID
-//! key) where each cell's tower is relative to home.
+//! long and how well, the handovers between them, and where each cell's tower
+//! is relative to home.
 //!
-//! Locations come only from OpenCellID (`OPENCELLID_KEY` in .env). Without a
-//! key nothing is guessed: the API says the key is needed.
+//! Tower positions come from public databases, asked one cell at a time:
+//! beaconDB first (no key needed), then OpenCellID when `OPENCELLID_KEY` is
+//! set and beaconDB doesn't know the cell. Only the cell IDs are sent, never
+//! a position (`considerIp: false` stops beaconDB guessing from our address).
+//! `TOWER_LOOKUP=off` in .env turns all outside lookups off. Nothing is
+//! guessed: a cell no database knows has no position.
 //!
-//! Home location: `HOME_LAT` / `HOME_LON` in .env at startup. Any other source
-//! (the phone's GPS, a browser) can replace it with [`Towers::set_home`], which
-//! is also exposed as `POST /api/location`.
+//! Home location: `HOME_LAT` / `HOME_LON` in .env at startup, or
+//! `POST /api/location` (browser). The phone's own position (location.rs) is
+//! kept separately as the "current" position and used for distances when no
+//! home is set; a manual home always wins.
 //!
 //! Everything is kept in `data/towers.json` (git-ignored: it contains tower IDs
 //! and your home location).
@@ -34,6 +39,8 @@ const SAVE_EVERY: Duration = Duration::from_secs(60);
 const LOOKUP_GAP: Duration = Duration::from_secs(5);
 const RETRY_ERROR_MS: i64 = 10 * 60_000;
 const RETRY_NOT_FOUND_MS: i64 = 7 * 24 * 3_600_000;
+pub const BEACONDB_URL: &str = "https://api.beacondb.net/v1/geolocate";
+pub const USER_AGENT: &str = "rhcs/0.1 (+https://github.com/awaaladin/control)";
 
 // ------------------------------------------------------------------ geo maths
 
@@ -78,16 +85,16 @@ pub struct Location {
 pub struct CellLocation {
     pub lat: f64,
     pub lon: f64,
-    /// OpenCellID's estimate of the cell's coverage radius.
+    /// The database's estimate of the cell's coverage radius / accuracy.
     pub range_m: Option<f64>,
-    /// How many measurements OpenCellID's position is based on.
+    /// How many measurements the position is based on (OpenCellID only).
     pub samples: Option<u64>,
     pub source: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Lookup {
-    /// "found" | "not_found" | "error"
+    /// "found" | "not_found" | "error" (the API adds "off", "incomplete", "pending")
     pub status: String,
     pub at: i64,
     pub message: Option<String>,
@@ -211,6 +218,9 @@ pub struct Book {
     pub cells: BTreeMap<String, Cell>,
     pub handovers: VecDeque<Handover>,
     pub home: Option<Location>,
+    /// The phone's latest position (not saved: it is re-read every 30 s).
+    #[serde(skip)]
+    pub current: Option<Location>,
     #[serde(skip)]
     serving: HashMap<String, Serving>,
     #[serde(skip)]
@@ -297,7 +307,13 @@ impl Book {
         handover
     }
 
-    /// The next cell OpenCellID should be asked about, if any.
+    /// Where distances are measured from: the manual home, else the phone's
+    /// current position. The bool says whether it is the manual home.
+    pub fn origin(&self) -> Option<(&Location, bool)> {
+        self.home.as_ref().map(|h| (h, true)).or_else(|| self.current.as_ref().map(|c| (c, false)))
+    }
+
+    /// The next cell the databases should be asked about, if any.
     pub fn next_lookup(&self, now: i64) -> Option<Cell> {
         self.cells
             .values()
@@ -377,6 +393,88 @@ pub fn parse_opencellid(body: &str) -> Result<Option<CellLocation>, String> {
     }
 }
 
+/// JSON body for beaconDB's geolocate API (Ichnaea / Google format) for one
+/// LTE cell. None when the cell lacks a numeric MCC/MNC or the TAC.
+pub fn beacondb_request(c: &Cell) -> Option<String> {
+    let mcc: u16 = c.mcc.as_deref()?.trim().parse().ok()?;
+    let mnc: u16 = c.mnc.as_deref()?.trim().parse().ok()?;
+    let tac = c.tac?;
+    Some(
+        json!({
+            "considerIp": false,
+            "cellTowers": [{
+                "radioType": "lte",
+                "mobileCountryCode": mcc,
+                "mobileNetworkCode": mnc,
+                "locationAreaCode": tac,
+                "cellId": c.cell_id,
+            }]
+        })
+        .to_string(),
+    )
+}
+
+/// beaconDB answer: Ok(Some) = the cell's estimated position, Ok(None) = not
+/// known (HTTP 404, or only an area/IP fallback, which is not the cell's
+/// position), Err = anything else.
+pub fn parse_beacondb(status: u16, body: &str) -> Result<Option<CellLocation>, String> {
+    let v: Option<Value> = serde_json::from_str(body.trim()).ok();
+    match status {
+        200 => {
+            let v = v.ok_or_else(|| "unexpected answer from beaconDB".to_string())?;
+            if v.get("fallback").is_some_and(|f| !f.is_null()) {
+                return Ok(None);
+            }
+            let loc = v.get("location");
+            let lat = loc.and_then(|l| l.get("lat")).and_then(Value::as_f64);
+            let lon = loc.and_then(|l| l.get("lng")).and_then(Value::as_f64);
+            match (lat, lon) {
+                (Some(lat), Some(lon)) if valid_coords(lat, lon) => Ok(Some(CellLocation {
+                    lat,
+                    lon,
+                    range_m: v.get("accuracy").and_then(Value::as_f64),
+                    samples: None,
+                    source: "beacondb".into(),
+                })),
+                _ => Err("beaconDB answered without a position".into()),
+            }
+        }
+        404 => Ok(None),
+        429 => Err("beaconDB: too many requests, retrying later".into()),
+        0 => Err("beaconDB could not be reached".into()),
+        code => {
+            let msg = v
+                .as_ref()
+                .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_default();
+            Err(format!("beaconDB: HTTP {code} {msg}").trim().to_string())
+        }
+    }
+}
+
+/// Outcome of asking every database in turn: the first position found wins;
+/// otherwise "error" if any database failed (retried soon), else "not_found".
+pub fn combine(answers: Vec<(&str, Result<Option<CellLocation>, String>)>, now: i64) -> (Lookup, Option<CellLocation>) {
+    let mut notes = Vec::new();
+    let mut failed = false;
+    for (name, a) in answers {
+        match a {
+            Ok(Some(loc)) => {
+                let msg = format!("position from {name}");
+                return (Lookup { status: "found".into(), at: now, message: Some(msg) }, Some(loc));
+            }
+            Ok(None) => notes.push(format!("not in {name}")),
+            Err(e) => {
+                failed = true;
+                notes.push(e);
+            }
+        }
+    }
+    let status = if failed { "error" } else { "not_found" };
+    let message = if notes.is_empty() { None } else { Some(notes.join("; ")) };
+    (Lookup { status: status.into(), at: now, message }, None)
+}
+
 pub fn parse_home(lat: Option<&str>, lon: Option<&str>) -> Option<(f64, f64)> {
     let lat: f64 = lat?.trim().parse().ok()?;
     let lon: f64 = lon?.trim().parse().ok()?;
@@ -392,7 +490,21 @@ fn valid_coords(lat: f64, lon: f64) -> bool {
 pub struct Towers {
     pub book: RwLock<Book>,
     key: Option<String>,
+    /// Outside lookups allowed (`TOWER_LOOKUP`, default on).
+    lookup_on: bool,
     path: PathBuf,
+}
+
+/// Which outside lookups are configured (for the API view).
+#[derive(Clone, Copy, Debug)]
+pub struct LookupCfg {
+    pub enabled: bool,
+    pub opencellid: bool,
+}
+
+/// `TOWER_LOOKUP` value: on unless it says off.
+pub fn lookup_switch(v: Option<&str>) -> bool {
+    !matches!(v.map(|v| v.trim().to_ascii_lowercase()).as_deref(), Some("off" | "0" | "false" | "no"))
 }
 
 impl Towers {
@@ -410,12 +522,18 @@ impl Towers {
         Self {
             book: RwLock::new(book),
             key: e.get("OPENCELLID_KEY").map(|k| k.trim().to_string()).filter(|k| !k.is_empty()),
+            lookup_on: lookup_switch(e.get("TOWER_LOOKUP").map(String::as_str)),
             path,
         }
     }
 
-    pub fn key_configured(&self) -> bool {
-        self.key.is_some()
+    pub fn cfg(&self) -> LookupCfg {
+        LookupCfg { enabled: self.lookup_on, opencellid: self.key.is_some() }
+    }
+
+    /// The phone's latest position (used for distances when no home is set).
+    pub async fn set_current(&self, loc: Location) {
+        self.book.write().await.current = Some(loc);
     }
 
     /// Plug-in point for any location source (phone GPS, browser, …).
@@ -480,6 +598,37 @@ pub async fn run(s: Shared) {
     }
 }
 
+async fn fetch_beacondb(c: &Cell) -> Result<Option<CellLocation>, String> {
+    let Some(body) = beacondb_request(c) else { return Err("the network codes are not numbers".into()) };
+    let mut cmd = tokio::process::Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-m",
+        "20",
+        "-A",
+        USER_AGENT,
+        "-H",
+        "content-type: application/json",
+        "--data-binary",
+        &body,
+        "-w",
+        "\n%{http_code}",
+        BEACONDB_URL,
+    ])
+    .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let out = cmd.output().await.map_err(|e| format!("could not run curl: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", text.as_str()));
+    let code: u16 = code.trim().parse().unwrap_or(0);
+    if code == 0 {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() { "beaconDB could not be reached".into() } else { format!("beaconDB: {err}") });
+    }
+    parse_beacondb(code, body)
+}
+
 async fn fetch_opencellid(key: &str, c: &Cell) -> Result<Option<CellLocation>, String> {
     let url = format!(
         "https://opencellid.org/cell/get?key={key}&mcc={}&mnc={}&lac={}&cellid={}&radio=LTE&format=json",
@@ -500,31 +649,31 @@ async fn fetch_opencellid(key: &str, c: &Cell) -> Result<Option<CellLocation>, S
     parse_opencellid(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// Looks up tower positions on OpenCellID, one cell at a time, cached on disk.
+/// Looks up tower positions (beaconDB, then OpenCellID if a key is set), one
+/// cell every few seconds at most, cached on disk.
 pub async fn geolocate(s: Shared) {
-    let Some(key) = s.towers.key.clone() else { return };
+    if !s.towers.lookup_on {
+        println!("  towers  outside lookups off (TOWER_LOOKUP=off)");
+        return;
+    }
+    let key = s.towers.key.clone();
     loop {
         tokio::time::sleep(LOOKUP_GAP).await;
         let Some(cell) = s.towers.book.read().await.next_lookup(now_ms()) else { continue };
-        let res = fetch_opencellid(&key, &cell).await;
-        let now = now_ms();
+        let mut answers = vec![("beaconDB", fetch_beacondb(&cell).await)];
+        let found = matches!(answers[0].1, Ok(Some(_)));
+        if let (false, Some(k)) = (found, key.as_deref()) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            answers.push(("OpenCellID", fetch_opencellid(k, &cell).await));
+        }
+        let (lookup, loc) = combine(answers, now_ms());
         {
             let mut b = s.towers.book.write().await;
             if let Some(c) = b.cells.get_mut(&cell.key) {
-                match res {
-                    Ok(Some(loc)) => {
-                        c.location = Some(loc);
-                        c.lookup = Some(Lookup { status: "found".into(), at: now, message: None });
-                    }
-                    Ok(None) => {
-                        c.lookup = Some(Lookup {
-                            status: "not_found".into(),
-                            at: now,
-                            message: Some("this cell is not in the OpenCellID database yet".into()),
-                        })
-                    }
-                    Err(e) => c.lookup = Some(Lookup { status: "error".into(), at: now, message: Some(e) }),
+                if loc.is_some() {
+                    c.location = loc;
                 }
+                c.lookup = Some(lookup);
             }
             b.dirty = true;
         }
@@ -557,8 +706,9 @@ fn source_view(st: &Option<SourceStats>) -> Value {
 }
 
 /// The full `/api/towers` answer (pure, so it is tested).
-pub fn view(b: &Book, key_configured: bool) -> Value {
-    let home = b.home.as_ref();
+pub fn view(b: &Book, lc: LookupCfg) -> Value {
+    let origin = b.origin();
+    let home = origin.map(|(l, _)| l);
     let serving = |src: &str| b.serving.get(src).map(|s| s.key.clone());
     let (router_now, phone_now) = (serving("router"), serving("phone"));
     let mut best: Option<(f64, &Cell)> = None;
@@ -581,8 +731,10 @@ pub fn view(b: &Book, key_configured: bool) -> Value {
                     best = Some((v, c));
                 }
             }
-            let lookup = if !key_configured {
-                json!({ "status": "no_key", "message": null })
+            let lookup = if c.location.is_some() && c.lookup.is_none() {
+                json!({ "status": "found", "message": null })
+            } else if !lc.enabled {
+                json!({ "status": "off", "message": "outside lookups are off (TOWER_LOOKUP=off)" })
             } else if !c.lookupable() {
                 json!({ "status": "incomplete", "message": "the TAC or network code is missing, so it can't be looked up" })
             } else {
@@ -626,15 +778,16 @@ pub fn view(b: &Book, key_configured: bool) -> Value {
         .collect();
 
     let best = best.map(|(sinr, c)| {
-        let place = match (home, &c.location) {
-            (Some(h), Some(l)) => {
+        let place = match (origin, &c.location) {
+            (Some((h, manual)), Some(l)) => {
                 let br = bearing_deg(h.lat, h.lon, l.lat, l.lon);
                 let d = distance_m(h.lat, h.lon, l.lat, l.lon);
                 Some(format!(
-                    " Its tower is about {:.1} km to the {} ({:.0}°): placing the router on the side of the house facing {} usually helps.",
+                    " Its tower is about {:.1} km to the {} ({:.0}°{}): placing the router on the side of the house facing {} usually helps.",
                     d / 1000.0,
                     compass(br),
                     br,
+                    if manual { "" } else { ", measured from your phone's position" },
                     compass(br)
                 ))
             }
@@ -653,18 +806,28 @@ pub fn view(b: &Book, key_configured: bool) -> Value {
         })
     });
 
-    let message = if !key_configured {
-        Some("Tower locations need an OpenCellID key. Add OPENCELLID_KEY to .env and restart rhcsd.")
+    let message = if !lc.enabled {
+        Some("Tower lookups are off (TOWER_LOOKUP=off in .env): no tower IDs are sent anywhere, so tower positions are not shown.")
     } else if home.is_none() {
-        Some("Home location not set: add HOME_LAT and HOME_LON to .env to see distance and direction.")
+        Some("No position yet for distance and direction: connect the phone (its location is read automatically), press \"Use this device's location\", or set HOME_LAT and HOME_LON in .env.")
     } else {
         None
     };
+    let mut sources = Vec::new();
+    if lc.enabled {
+        sources.push("beacondb");
+        if lc.opencellid {
+            sources.push("opencellid");
+        }
+    }
 
     json!({
-        "key_configured": key_configured,
+        "key_configured": lc.opencellid,
+        "lookup": { "enabled": lc.enabled, "sources": sources },
         "message": message,
         "home": home,
+        "home_manual": origin.is_some_and(|(_, m)| m),
+        "current": b.current,
         "serving": { "router": router_now, "phone": phone_now },
         "cells": cells,
         "handovers": b.handovers.iter().rev().collect::<Vec<_>>(),
@@ -674,7 +837,7 @@ pub fn view(b: &Book, key_configured: bool) -> Value {
 
 async fn get_towers(State(s): State<Shared>) -> Json<Value> {
     let b = s.towers.book.read().await;
-    Json(view(&b, s.towers.key_configured()))
+    Json(view(&b, s.towers.cfg()))
 }
 
 async fn get_location(State(s): State<Shared>) -> Json<Value> {
@@ -798,13 +961,18 @@ mod tests {
         assert_eq!(b.cells[&rd(0x1302, 0.0).key()].router.as_ref().unwrap().secs, 0.0);
         assert_eq!(b.handovers.len(), 1);
 
-        let v = view(&b, false);
+        let v = view(&b, LookupCfg { enabled: false, opencellid: false });
         assert_eq!(v["key_configured"], json!(false));
-        assert!(v["message"].as_str().unwrap().contains("OpenCellID key"));
+        assert!(v["message"].as_str().unwrap().contains("TOWER_LOOKUP=off"));
         assert_eq!(v["cells"].as_array().unwrap().len(), 2);
         assert_eq!(v["serving"]["router"], json!(rd(0x1302, 0.0).key()));
         assert_eq!(v["best"]["key"], json!(rd(0x1302, 0.0).key()));
-        assert_eq!(v["cells"][0]["lookup"]["status"], json!("no_key"));
+        assert_eq!(v["cells"][0]["lookup"]["status"], json!("off"));
+        // Lookups on (the default), no key needed: cells wait for beaconDB.
+        let v = view(&b, LookupCfg { enabled: true, opencellid: false });
+        assert_eq!(v["cells"][0]["lookup"]["status"], json!("pending"));
+        assert_eq!(v["lookup"]["sources"], json!(["beacondb"]));
+        assert!(v["message"].as_str().unwrap().contains("No position yet"));
     }
 
     #[test]
@@ -815,13 +983,79 @@ mod tests {
         let key = rd(0x2001, 0.0).key();
         b.cells.get_mut(&key).unwrap().location =
             Some(CellLocation { lat: 10.009, lon: 10.0, range_m: Some(1000.0), samples: Some(3), source: "opencellid".into() });
-        let v = view(&b, true);
+        let v = view(&b, LookupCfg { enabled: true, opencellid: true });
         let c = &v["cells"][0];
         assert!((c["distance_m"].as_f64().unwrap() - 1000.8).abs() < 2.0);
         assert_eq!(c["compass"], json!("north"));
-        assert_eq!(c["lookup"]["status"], json!("pending"));
+        assert_eq!(c["lookup"]["status"], json!("found"));
         assert!(v["message"].is_null());
+        assert_eq!(v["home_manual"], json!(true));
+        assert_eq!(v["lookup"]["sources"], json!(["beacondb", "opencellid"]));
         assert!(v["best"]["message"].as_str().unwrap().contains("to the north"));
+
+        // Without a manual home, the phone's current position is used, and said so.
+        b.home = None;
+        b.current = Some(Location { lat: 10.0, lon: 10.0, accuracy_m: Some(12.0), source: "phone".into(), ts: 0 });
+        let v = view(&b, LookupCfg { enabled: true, opencellid: false });
+        assert_eq!(v["home_manual"], json!(false));
+        assert_eq!(v["home"]["source"], json!("phone"));
+        assert!(v["best"]["message"].as_str().unwrap().contains("phone's position"));
+        // A manual home wins over the phone position.
+        b.home = Some(Location { lat: 10.0, lon: 10.001, accuracy_m: None, source: "env".into(), ts: 0 });
+        let v = view(&b, LookupCfg { enabled: true, opencellid: false });
+        assert_eq!(v["home"]["source"], json!("env"));
+        assert_eq!(v["current"]["source"], json!("phone"));
+    }
+
+    fn lookup_cell() -> Cell {
+        Cell { key: "k".into(), mcc: Some("001".into()), mnc: Some("01".into()), tac: Some(100), cell_id: 4660, ..Default::default() }
+    }
+
+    #[test]
+    fn beacondb_request_body() {
+        let body: Value = serde_json::from_str(&beacondb_request(&lookup_cell()).unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({"considerIp": false, "cellTowers": [{"radioType": "lte", "mobileCountryCode": 1,
+                   "mobileNetworkCode": 1, "locationAreaCode": 100, "cellId": 4660}]})
+        );
+        let mut no_tac = lookup_cell();
+        no_tac.tac = None;
+        assert!(beacondb_request(&no_tac).is_none());
+        let mut bad = lookup_cell();
+        bad.mnc = Some("x".into());
+        assert!(beacondb_request(&bad).is_none());
+    }
+
+    #[test]
+    fn beacondb_answers() {
+        // Shapes as returned by api.beacondb.net (made-up position).
+        let ok = parse_beacondb(200, r#"{"location":{"lat":10.5,"lng":7.25},"accuracy":850}"#).unwrap().unwrap();
+        assert_eq!((ok.lat, ok.lon, ok.range_m, ok.source.as_str()), (10.5, 7.25, Some(850.0), "beacondb"));
+        // An IP / area fallback is not the cell's position.
+        let ipf = r#"{"location":{"lat":10.5,"lng":7.25},"accuracy":25000,"fallback":"ipf","license":"x"}"#;
+        assert_eq!(parse_beacondb(200, ipf), Ok(None));
+        let nf = r#"{"error":{"code":404,"errors":[{"domain":"geolocation","message":"No location could be estimated based on the data provided","reason":"notFound"}],"message":"Not found"}}"#;
+        assert_eq!(parse_beacondb(404, nf), Ok(None));
+        assert!(parse_beacondb(429, "").unwrap_err().contains("too many"));
+        assert!(parse_beacondb(500, r#"{"error":{"message":"boom"}}"#).unwrap_err().contains("HTTP 500 boom"));
+        assert!(parse_beacondb(200, "<html>").is_err());
+        assert!(parse_beacondb(0, "").is_err());
+    }
+
+    #[test]
+    fn databases_combined_in_order() {
+        let loc = CellLocation { lat: 1.0, lon: 2.0, range_m: None, samples: None, source: "opencellid".into() };
+        let (l, found) = combine(vec![("beaconDB", Ok(None)), ("OpenCellID", Ok(Some(loc.clone())))], 5);
+        assert_eq!((l.status.as_str(), l.at), ("found", 5));
+        assert_eq!(found, Some(loc));
+        let (l, found) = combine(vec![("beaconDB", Ok(None)), ("OpenCellID", Ok(None))], 5);
+        assert_eq!(l.status, "not_found");
+        assert_eq!(l.message.as_deref(), Some("not in beaconDB; not in OpenCellID"));
+        assert!(found.is_none());
+        let (l, _) = combine(vec![("beaconDB", Err("beaconDB could not be reached".into()))], 5);
+        assert_eq!(l.status, "error");
+        assert!(lookup_switch(None) && lookup_switch(Some("on")) && !lookup_switch(Some(" OFF ")) && !lookup_switch(Some("0")));
     }
 
     #[test]

@@ -5,11 +5,15 @@
 
 mod api;
 mod boost;
+mod connections;
 mod links;
+mod location;
 mod phone;
+mod places;
 mod router_task;
 mod scan_task;
 mod state;
+mod switch;
 mod towers;
 
 use anyhow::{Context, Result};
@@ -25,6 +29,7 @@ async fn main() -> Result<()> {
     tokio::spawn(scan_task::run(s.clone()));
     tokio::spawn(towers::run(s.clone()));
     tokio::spawn(towers::geolocate(s.clone()));
+    tokio::spawn(location::run(s.clone()));
 
     let app = api::router(s.clone());
     let listener = tokio::net::TcpListener::bind(&cfg.bind)
@@ -39,6 +44,10 @@ async fn main() -> Result<()> {
         cfg.phone_adb_addr.as_deref().map(|a| format!(", wifi {a}")).unwrap_or_default()
     );
     println!("  auth    {}", if cfg.token.is_some() { "token required for changes" } else { "changes allowed from this machine only" });
+    println!(
+        "  admin   {}",
+        if s.admin { "yes: PULSE can switch links" } else { "no: link switching off (start rhcsd as administrator to enable it)" }
+    );
     if cfg.web_dir.join("index.html").is_file() {
         println!("  web     {}", cfg.web_dir.display());
     }
