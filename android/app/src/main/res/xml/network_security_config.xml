@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The home system is reached over plain http on your own network (192.168.x.x, 10.x.x.x, the phone itself),
+     and the address changes, so plain http is allowed. The app only ever loads the address you choose. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

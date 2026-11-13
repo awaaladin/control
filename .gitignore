@@ -10,3 +10,13 @@
 *.log
 .env
 /logs
+
+# Android app (built only on GitHub Actions, never locally)
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.idea/
+*.jks
+*.keystore
+/apk-output/
