@@ -17,7 +17,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
-pub const CAPABILITIES: &[&str] = &["telemetry", "history", "devices", "phone", "events", "router_relogin", "scan"];
+pub const CAPABILITIES: &[&str] = &["telemetry", "history", "devices", "phone", "events", "router_relogin", "scan", "boost", "towers", "location"];
 
 pub fn router(s: Shared) -> Router {
     let cors = CorsLayer::new()
@@ -38,6 +38,8 @@ pub fn router(s: Shared) -> Router {
         .route("/api/router/action", post(router_action))
         .route("/api/settings", get(get_settings).post(set_settings))
         .route("/ws", get(ws))
+        .merge(crate::boost::routes())
+        .merge(crate::towers::routes())
         .with_state(s.clone());
 
     let web = s.cfg.web_dir.clone();
@@ -51,7 +53,7 @@ pub fn router(s: Shared) -> Router {
     app.layer(cors)
 }
 
-fn authorized(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
+pub(crate) fn authorized(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
     match &s.cfg.token {
         Some(token) => {
             let direct = headers.get("x-rhcs-token").and_then(|v| v.to_str().ok());
@@ -65,7 +67,7 @@ fn authorized(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
     }
 }
 
-fn denied() -> Response {
+pub(crate) fn denied() -> Response {
     (
         StatusCode::UNAUTHORIZED,
         Json(json!({ "ok": false, "message": "not allowed: send x-rhcs-token, or call from this machine" })),

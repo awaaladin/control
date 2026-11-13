@@ -100,6 +100,7 @@ Give a device on your hotspot a friendly name: add a line to `.env` such as
 | **Search devices** | Find a device by name, IP, MAC or maker |
 | **Tap a device** | Opens its details: IP, MAC, maker, name, open services, what it announces about itself, first and last seen |
 | **Scan** | Look for devices right now (asks "Scan the LAN now?" first). It also scans by itself every 5 minutes |
+| **Alert on unknown devices** | Off by default. When on, the browser pops up a notification each time a device without a friendly name (see 2.3) joins the router's network or the phone's hotspot. Works on the laptop itself (`http://localhost:7878`); browsers block it on plain `http://` LAN addresses. The choice is remembered by that browser only |
 
 When a device joins or leaves, it animates in or out and appears in the Log.
 
@@ -134,6 +135,74 @@ message with the result.
 | **Filter by kind** | Show only one kind of event |
 | **Search events** | Find events by text (a device name, an IP…) |
 | **Export signal CSV** | Download the signal history as a spreadsheet file |
+
+### 2.8 Boost: lowest, steadiest ping for games
+The laptop is often on more than one network at once: Wi-Fi to the router,
+USB tethering to the phone, sometimes the phone's hotspot. **Game Boost** tests
+each of them and tells you which one is best for online games (Free Fire and
+the like).
+
+1. Press **Run Game Boost**. It takes about 5 seconds.
+2. Each connection gets a card that fills in live:
+
+| Part | What it tells you |
+|---|---|
+| **Ping ring** | Typical time for a round trip to the internet, in milliseconds (ms). Green ≤ 50, cyan ≤ 90, amber ≤ 150, red above |
+| **Jitter** | How much the ping jumps from one moment to the next. Under 8 ms feels smooth; above 30 ms you feel stutter even if ping is low |
+| **Loss** | Pings that got no answer. Any loss causes stutter or "rubber-banding" |
+| **Best / slow (p90)** | The fastest ping, and the ping that 1 in 10 pings is slower than |
+| **Radio** | SINR and RSRP of the router or phone behind that connection, if known |
+| **Graph** | Every ping of the test; red lines are pings that got lost |
+| **In use now** | Windows is currently sending your internet through this connection |
+| **Per target** | The same numbers for each test server |
+
+3. The **Recommendation** box names the best connection, for example
+   *"Use Phone (USB): 38 ms vs 71 ms, jitter 4 ms vs 19 ms"*, and explains why
+   in plain words.
+4. If the best connection isn't the one Windows uses, the box shows the
+   command to switch, e.g.
+   `powershell -ExecutionPolicy Bypass -File scripts\lan-only.ps1 -Interface "Wi-Fi"`.
+   Run it yourself in an **admin** PowerShell in the rhcs folder; add `-Undo`
+   to go back. rhcs never runs it for you and never changes network settings.
+5. **Keep measuring** (switch at the top) repeats the test every 10 seconds
+   until you press **Stop watching**: useful while moving the router.
+
+Game Boost **cannot make the signal stronger** and cannot change how your
+operator routes traffic. It tests general internet servers (Cloudflare, Google
+and Quad9 by default), not the game's own servers: the game's own ping display
+has the final word. To test other servers, set them in `.env`, e.g.
+`BOOST_TARGETS=1.1.1.1:443,8.8.8.8:53` (host:port, comma separated).
+
+Also on the page:
+| Part | What it shows |
+|---|---|
+| **Tips for lower ping** | What else helps: Aim mode for the router, pausing heavy users (with a count of other devices on your networks), USB over hotspot, phone temperature |
+| **Best time of day** | Average router SINR per hour of the day, best hours highlighted. Built from the last 24 h rhcsd has been running (it isn't saved when rhcsd stops) |
+
+### 2.9 Towers: where your signal comes from
+Every cell (tower antenna) the router or the phone has used is recorded, with
+how long each stayed on it and the signal it got there. Records survive
+restarts (they're saved in `data/towers.json`).
+
+| Part | What it shows |
+|---|---|
+| **Map** | Home (teal dot), each tower, and a line from home to each tower. Line colour = average SINR seen on that tower; solid line = serving now; thickest line = cleanest tower. Needs an OpenCellID key |
+| **Cleanest tower so far** | The cell with the best average SINR, and (with a key and home location) its distance and direction, e.g. "about 1.8 km to the north-east (47°)". Placing the router on the side of the house facing that direction usually helps |
+| **Cells** | eNB (tower) and sector, PCI, band, time spent on it by router and phone, SINR average / best, RSRP average, distance and direction, when last seen. **router now / phone now** marks the current cell |
+| **Handovers** | Every switch from one cell to another, by router or phone, with how long it stayed on the previous cell. Many short stays mean the router sits between two towers: try Aim mode |
+| **Use this device's location** | Saves the position of the device you're holding as "home". Browsers only allow this on the laptop itself (`http://localhost:7878`) |
+
+**Tower positions need a free OpenCellID key.** Without one the map is replaced
+by instructions and nothing is guessed:
+1. Sign up at **opencellid.org** and copy your access token.
+2. Add `OPENCELLID_KEY=your-token` to `.env`.
+3. Optional, for distance and direction: `HOME_LAT=` and `HOME_LON=` (decimal
+   degrees, from any map app).
+4. Restart rhcsd.
+
+With a key, rhcsd sends the IDs of the cells it has seen (never your location)
+to OpenCellID, one at a time, and keeps the answers. OpenCellID positions are
+estimates collected by volunteers and can be off by a few hundred metres.
 
 ---
 
@@ -187,6 +256,13 @@ problems), and in **Control → Source health**.
 | **Stale** on the rings | No new reading for a few seconds | Look for an amber box explaining why | Yes |
 | **not allowed** | A change from another device without the token | Use the laptop, or set the token | n/a |
 | **not available yet** | That control isn't enabled yet | n/a | n/a |
+| **No internet link found** (Boost) | The laptop has no network with a gateway | Connect to the router or turn on USB tethering | Yes, run again once connected |
+| **No answers: no internet through this link** (Boost) | That connection reaches its router/phone, but nothing beyond it (no data, no credit, or the router lost its 4G connection) | Check the router's or phone's mobile data | n/a |
+| **Links are about equal** (Boost) | The best two connections are within a few ms | Nothing: switching won't be noticeable | n/a |
+| **Tower locations need an OpenCellID key** (Towers) | No `OPENCELLID_KEY` in `.env` | See 2.9 | n/a |
+| **Home location not set** (Towers) | No `HOME_LAT` / `HOME_LON` | Add them to `.env`, or press **Use this device's location** on the laptop | n/a |
+| **not in OpenCellID** (Towers) | Nobody has mapped that cell yet | Nothing; it is retried weekly | Maybe |
+| **lookup failed** (Towers) | No internet, wrong key, or daily limit reached; hover for the exact reason | Check the key | Retried every 10 min |
 | **Microphone access was blocked** | The browser refused the microphone | Allow the microphone for this site in browser settings | n/a |
 
 ### 4.2 Common situations
@@ -208,6 +284,9 @@ problems), and in **Control → Source health**.
 |---|---|
 | Check if my internet is good right now | **Signal**: look at the ring colours |
 | Find where to put the router | **Signal → Aim mode**, Tone on, move slowly, **Mark spot** |
+| Get the best ping for a game | **Boost → Run Game Boost**, follow the recommendation |
+| See which way the towers are | **Towers** (needs an OpenCellID key) |
+| Know the best time to play | **Boost → Best time of day** |
 | Know why it was slow last night | **Signal → Timeline → 24 h**, look for dips and handover markers |
 | See who's on my Wi-Fi or hotspot | **Network** (router) and **Phone → Hotspot clients** |
 | Spot a stranger | **Log**: filter by device joins; unknown makers stand out |
@@ -247,6 +326,12 @@ problems), and in **Control → Source health**.
 | **MCC / MNC** | Country and network code: 621/30 = MTN Nigeria |
 | **Handover** | Switching from one tower or band to another |
 | **Hotspot client** | A device using your phone's Wi-Fi hotspot |
+| **Ping** | Time for a message to reach a server and come back, in ms |
+| **Jitter** | How much the ping changes from one moment to the next |
+| **Loss** | Messages that never got an answer |
+| **Link** | One of the laptop's internet connections (router Wi-Fi, phone USB, phone hotspot) |
+| **OpenCellID** | Free, open database of tower positions |
+| **Bearing** | Direction in degrees, clockwise from north (90° = east) |
 | **MAC** | A device's hardware address |
 | **Stale** | No fresh reading for a few seconds |
 | **Backend / service / rhcsd** | The program on the laptop that talks to your devices |

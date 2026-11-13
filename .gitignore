@@ -1,5 +1,8 @@
 /target
 /data/oui.csv
+# tower IDs and home location
+/data/towers.json
+/data/towers.json.tmp
 *.log
 .env
 /logs

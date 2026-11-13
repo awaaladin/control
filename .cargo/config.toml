@@ -1,0 +1,7 @@
+# Cross-compiling rhcsd for Android phones (ARM64) without the Android NDK:
+# a fully static musl binary, linked with the lld that ships with Rust, run
+# inside Termux.  Build with:
+#   cargo build --release --target aarch64-unknown-linux-musl -p rhcsd
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld", "-C", "target-feature=+crt-static", "-C", "link-self-contained=yes"]

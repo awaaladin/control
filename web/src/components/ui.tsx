@@ -110,6 +110,8 @@ const paths: Record<string, string> = {
   play: 'M7 5l12 7-12 7z',
   mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v4',
   trash: 'M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13',
+  boost: 'M13 2.5L5 13.5h6l-1 8 8-11h-6z',
+  tower: 'M12 10v11M8.5 21h7M9.5 21L12 10l2.5 11M12 8.5m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0M8 4.5a6 6 0 0 0 0 8M16 4.5a6 6 0 0 1 0 8M5.2 2.5a10 10 0 0 0 0 12M18.8 2.5a10 10 0 0 1 0 12',
 };
 
 export function Icon({ name, size = 20, className }: { name: keyof typeof paths | string; size?: number; className?: string }) {

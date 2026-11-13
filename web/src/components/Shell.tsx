@@ -5,9 +5,11 @@ import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import { Icon } from './ui';
 
-export type Route = 'signal' | 'phone' | 'network' | 'audio' | 'control' | 'log';
+export type Route = 'signal' | 'boost' | 'towers' | 'phone' | 'network' | 'audio' | 'control' | 'log';
 export const ROUTES: { id: Route; label: string; icon: string }[] = [
   { id: 'signal', label: 'Signal', icon: 'signal' },
+  { id: 'boost', label: 'Boost', icon: 'boost' },
+  { id: 'towers', label: 'Towers', icon: 'tower' },
   { id: 'phone', label: 'Phone', icon: 'phone' },
   { id: 'network', label: 'Network', icon: 'network' },
   { id: 'audio', label: 'Audio', icon: 'audio' },

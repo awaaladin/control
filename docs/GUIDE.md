@@ -51,7 +51,7 @@ control/
 ├── web/                  PULSE dashboard (TypeScript + React)
 ├── scripts/              Windows helper scripts (PowerShell)
 ├── docs/                 this guide, hardware findings, roadmap
-├── data/                 downloaded data, e.g. the MAC vendor list (not committed)
+├── data/                 MAC vendor list, tower records (not committed)
 └── logs/                 CSV signal logs and lab logs (not committed)
 ```
 
@@ -110,6 +110,9 @@ A **crate** is a Rust package. A **workspace** groups several crates that build 
 | `phone.rs` | Polls the phone over ADB every 5 s (USB first, then Wi-Fi); hotspot join/leave events |
 | `scan_task.rs` | Scans every attached network every 5 min (or on demand); device join/leave events |
 | `api.rs` | HTTP routes, WebSocket, permissions, serves the PULSE build |
+| `links.rs` | Lists this machine's internet links (adapters that are up and have a gateway, via `GetAdaptersAddresses`) and names them "Router (Wi-Fi)", "Phone (USB)", "Phone (hotspot)" |
+| `boost.rs` | Game Boost: TCP-connect ping, jitter and loss per link, scoring, recommendation; also the hourly signal summary |
+| `towers.rs` | Cells seen by router and phone, time and signal on each, handovers, OpenCellID lookups, home location, distance/bearing maths. Saved in `data/towers.json` |
 
 ### 2.2 The dashboard (`web/`)
 
@@ -119,7 +122,7 @@ A **crate** is a Rust package. A **workspace** groups several crates that build 
 |---|---|
 | `src/lib/` | `rhcs.ts` (API + WebSocket client), `store.ts` (app state), `types.ts` (data shapes matching the Rust API), `demo.ts` (clearly labelled demo data), chart and formatting helpers |
 | `src/components/` | Glow-ring gauges, live canvas charts, network constellation, app shell |
-| `src/pages/` | Signal, Aim mode, Phone, Network, Audio, Control, Log |
+| `src/pages/` | Signal, Aim mode, Boost, Towers, Phone, Network, Audio, Control, Log |
 | `src/styles/` | Theme and layout CSS |
 | `dist/` | The built site. `rhcsd` serves it at `http://localhost:7878` |
 
@@ -176,6 +179,9 @@ Copy `.env.example` to `.env` and fill it in. Everything private lives here.
 | `SCAN_CIDRS` | Extra networks to scan, e.g. `192.168.30.0/24` |
 | `SCAN_INTERVAL_S` | Seconds between automatic scans (default 300) |
 | `ADB_PATH` | Path to `adb.exe` if it isn't found automatically |
+| `BOOST_TARGETS` | Game Boost test servers, `host:port` comma separated. Default `1.1.1.1:443,8.8.8.8:443,9.9.9.9:443,1.1.1.1:53,8.8.8.8:53` |
+| `OPENCELLID_KEY` | OpenCellID access token, for tower positions (optional; without it no positions are shown) |
+| `HOME_LAT`, `HOME_LON` | Home position in decimal degrees, for tower distance and direction (optional) |
 
 **Never commit `.env`.** It's in `.gitignore`. Tower IDs reveal your approximate location.
 
@@ -256,7 +262,65 @@ large amber **DEMO** badge, never mixed with live data.
 | `POST /api/scan` | Start a scan now |
 | `POST /api/router/action` `{"action":"relogin"}` | Reset the router session (other actions return "not implemented yet") |
 | `GET/POST /api/settings` | Router polling interval |
-| `GET /ws` | WebSocket: snapshot on connect, then live `status`, `telemetry`, `phone`, `devices`, `event` messages |
+| `GET /api/signal/hourly` | Router SINR, RSRP and download rate averaged per local hour of day, from the in-memory 24 h history: `{ hours: [{ hour, samples, avg_sinr, avg_rsrp, avg_rx_bps }] ×24, covered_h }` |
+| `POST /api/boost/run` `{"watch":false,"probes":20}` | Start a Game Boost measurement (both fields optional; `probes` 5-100; `watch: true` repeats every 10 s). Needs permission like other POSTs |
+| `POST /api/boost/stop` | Turn watch mode off (the current run finishes) |
+| `GET /api/boost` | Latest Game Boost state (shape below) |
+| `GET /api/towers` | Cells seen, handovers, home, best cell (shape below) |
+| `GET /api/location` | Home location or `null` |
+| `POST /api/location` `{"lat":..,"lon":..,"accuracy_m":..,"source":"phone"}` | Set the home location (plug-in point for phone GPS or a browser). Needs permission |
+| `GET /ws` | WebSocket: snapshot on connect, then live `status`, `telemetry`, `phone`, `devices`, `event`, `boost` messages |
+
+#### Game Boost shape (`GET /api/boost`, and `data` of WebSocket `{ "type": "boost", "ts", "data" }`)
+Sent after every probe round while measuring, and once at the end.
+```
+{ phase: "idle"|"measuring"|"done"|"error", running, watch, started, finished,
+  done, total,                  // progress, in probe rounds
+  probes, interval_ms, targets: ["1.1.1.1:443", …],
+  error,                        // e.g. no link found, targets unresolvable
+  links: [{
+    id, name, kind: "router"|"phone_usb"|"phone_hotspot"|"other", medium, adapter,
+    description, local_ip, gateway, metric, is_default,
+    sent, received, loss_pct, ping_ms, jitter_ms, best_ms, p90_ms,
+    targets: [{ target, sent, received, refused, median_ms, jitter_ms }],
+    radio: { source: "router"|"phone", rsrp, sinr } | null,
+    score, grade: "excellent"|"good"|"fair"|"poor"|"none", verdict,
+    recent: [ms|null, …],       // per round, for the graph
+    error }],
+  recommendation: { best, best_name, headline, explanation,
+                    already_default, close_call, commands: ["powershell … lan-only.ps1 …"] } | null }
+```
+How it measures: for each link, a TCP handshake to every target from a socket
+bound to that link's local address (Windows' strong host model sends it out of
+that link; no admin, no ICMP), 20 rounds 200 ms apart. Ping = median over
+targets of each target's median; jitter = mean change between consecutive
+pings to the same target; loss = unanswered / sent. A refused connection
+doesn't count as a ping (Windows retries those, so the time is not a round
+trip). Score (lower is better) = ping + 2×jitter + 10 ms per 1 % loss + up to
+20 ms when the radio's SINR is under 13 dB. A link with no answer in 4 rounds
+in a row is reported as having no internet. On Linux/Android only the default
+route is measured.
+
+#### Towers shape (`GET /api/towers`)
+```
+{ key_configured, message,      // message explains a missing key or home
+  home: { lat, lon, accuracy_m, source, ts } | null,
+  serving: { router: key|null, phone: key|null },
+  cells: [{ key, mcc, mnc, tac, cell_id, enb, sector, pci, bands, earfcn,
+            first_seen, last_seen, seen_by: ["router","phone"], serving: […],
+            router: { first_seen, last_seen, secs, samples, best_rsrp, avg_rsrp, best_sinr, avg_sinr } | null,
+            phone:  { …same… } | null,
+            location: { lat, lon, range_m, samples, source: "opencellid" } | null,
+            lookup: { status: "no_key"|"incomplete"|"pending"|"found"|"not_found"|"error", at, message },
+            distance_m, bearing_deg, compass }],
+  handovers: [{ ts, source, from: { key, cell_id, pci, band }, to: {…}, stayed_s }],   // newest first, max 300
+  best: { key, avg_sinr, message } | null }
+```
+Cells are followed from the `telemetry` and `phone` WebSocket messages (router
+TAC is hex text, phone TAC a number; both are stored as numbers). OpenCellID is
+asked about one cell every 5 s at most, using `curl`; "not found" is retried
+after 7 days, errors after 10 minutes. `data/towers.json` holds tower IDs and
+the home location and is git-ignored.
 
 ---
 

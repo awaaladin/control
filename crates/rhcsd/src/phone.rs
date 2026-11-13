@@ -129,7 +129,32 @@ pub fn parse(text: &str) -> PhoneStatus {
         }
     }
 
-    let hotspot_clients = neigh
+    let hotspot_clients = parse_neigh(neigh);
+
+    PhoneStatus {
+        battery_level: bat.get("level").and_then(|v| v.parse().ok()),
+        battery_temp_c: bat.get("temperature").and_then(|v| v.parse::<f32>().ok()).map(|t| t / 10.0),
+        charging: bat.get("status").map(|s| s == "2"),
+        usb_powered: bat.get("USB powered").map(|s| s == "true"),
+        rsrp: num(sig.get("rsrp")),
+        rsrq: num(sig.get("rsrq")),
+        sinr: num(sig.get("rssnr")),
+        rssi: num(sig.get("rssi")),
+        pci: int(id.get("mPci")),
+        cell_id: int(id.get("mCi")),
+        tac: int(id.get("mTac")),
+        earfcn: int(id.get("mEarfcn")),
+        band,
+        mcc: text_val("mMcc"),
+        mnc: text_val("mMnc"),
+        hotspot_clients,
+        ..Default::default()
+    }
+}
+
+/// `ip neigh` output → IPv4 neighbours that are actually present.
+pub fn parse_neigh(neigh: &str) -> Vec<HotspotClient> {
+    neigh
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split_whitespace().collect();
@@ -152,27 +177,7 @@ pub fn parse(text: &str) -> PhoneStatus {
                 label: None,
             })
         })
-        .collect();
-
-    PhoneStatus {
-        battery_level: bat.get("level").and_then(|v| v.parse().ok()),
-        battery_temp_c: bat.get("temperature").and_then(|v| v.parse::<f32>().ok()).map(|t| t / 10.0),
-        charging: bat.get("status").map(|s| s == "2"),
-        usb_powered: bat.get("USB powered").map(|s| s == "true"),
-        rsrp: num(sig.get("rsrp")),
-        rsrq: num(sig.get("rsrq")),
-        sinr: num(sig.get("rssnr")),
-        rssi: num(sig.get("rssi")),
-        pci: int(id.get("mPci")),
-        cell_id: int(id.get("mCi")),
-        tac: int(id.get("mTac")),
-        earfcn: int(id.get("mEarfcn")),
-        band,
-        mcc: text_val("mMcc"),
-        mnc: text_val("mMnc"),
-        hotspot_clients,
-        ..Default::default()
-    }
+        .collect()
 }
 
 async fn read_phone(
@@ -200,7 +205,114 @@ async fn read_phone(
     Ok(st)
 }
 
+/// True when rhcsd itself runs on the phone, inside Termux (the "phone hub").
+pub fn in_termux() -> bool {
+    cfg!(target_os = "linux") && std::env::var("PREFIX").map(|p| p.contains("com.termux")).unwrap_or(false)
+}
+
+async fn local(cmd: &str, args: &[&str]) -> Result<String> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::process::Command::new(cmd).args(args).kill_on_drop(true).output(),
+    )
+    .await
+    .with_context(|| format!("{cmd} timed out (is the Termux:API app installed and allowed?)"))?
+    .with_context(|| format!("could not run {cmd} (install it in Termux: pkg install termux-api)"))?;
+    if !out.status.success() {
+        bail!("{cmd} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Reads the phone it runs on, through Termux:API (battery, cell info) and `ip neigh`.
+async fn read_termux(info: &mut Option<(Option<String>, Option<String>)>) -> Result<PhoneStatus> {
+    if info.is_none() {
+        let get = |p: &'static str| async move { local("getprop", &[p]).await.ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) };
+        let market = get("ro.vivo.product.release.name").await;
+        let model = get("ro.product.model").await;
+        let name = match (market, model) {
+            (Some(m), Some(md)) => Some(format!("{m} ({md})")),
+            (None, Some(md)) => Some(md),
+            (m, None) => m,
+        };
+        *info = Some((name, get("ro.build.version.release").await));
+    }
+    let battery = local("termux-battery-status", &[]).await?;
+    // Cell info needs the Phone + Location permissions for Termux:API; report it but keep going.
+    let cells = local("termux-telephony-cellinfo", &[]).await.unwrap_or_default();
+    let neigh = local("ip", &["neigh"]).await.unwrap_or_default();
+    let mut st = parse_termux(&battery, &cells, &neigh);
+    if let Some((m, a)) = info {
+        st.model = m.clone();
+        st.android = a.clone();
+    }
+    Ok(st)
+}
+
+/// Termux:API JSON → PhoneStatus. Tolerant of missing fields and of numbers
+/// given as strings; Android's "unavailable" (Integer.MAX_VALUE) becomes None.
+pub fn parse_termux(battery: &str, cells: &str, neigh: &str) -> PhoneStatus {
+    use serde_json::Value;
+    let b: Value = serde_json::from_str(battery.trim()).unwrap_or(Value::Null);
+    let c: Value = serde_json::from_str(cells.trim()).unwrap_or(Value::Null);
+    let lte = c.as_array().and_then(|a| {
+        let is_lte = |x: &&Value| x.get("type").and_then(Value::as_str).map(|t| t.eq_ignore_ascii_case("lte")).unwrap_or(false);
+        a.iter()
+            .filter(is_lte)
+            .find(|x| x.get("registered").and_then(Value::as_bool) == Some(true))
+            .or_else(|| a.iter().find(is_lte))
+    });
+    let num = |v: Option<&Value>| -> Option<f64> {
+        let n = match v? {
+            Value::Number(n) => n.as_f64()?,
+            Value::String(s) => s.trim().parse().ok()?,
+            _ => return None,
+        };
+        (n.abs() < 2_000_000_000.0).then_some(n)
+    };
+    let cell = |k: &str| num(lte.and_then(|x| x.get(k)));
+    let text = |k: &str| {
+        lte.and_then(|x| x.get(k)).and_then(|v| match v {
+            Value::String(s) if !s.is_empty() && s != "null" => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        })
+    };
+    let band = lte
+        .and_then(|x| x.get("bands").or_else(|| x.get("band")))
+        .and_then(|v| match v {
+            Value::Array(a) => num(a.first()),
+            other => num(Some(other)),
+        })
+        .map(|n| n as u16);
+
+    PhoneStatus {
+        battery_level: num(b.get("percentage")).map(|v| v as u8),
+        battery_temp_c: num(b.get("temperature")).map(|v| v as f32),
+        charging: b.get("status").and_then(Value::as_str).map(|s| s.eq_ignore_ascii_case("CHARGING")),
+        usb_powered: b.get("plugged").and_then(Value::as_str).map(|s| s.to_ascii_uppercase().contains("USB")),
+        rsrp: cell("rsrp").map(|v| v as f32),
+        rsrq: cell("rsrq").map(|v| v as f32),
+        sinr: cell("rssnr").or_else(|| cell("sinr")).map(|v| v as f32),
+        rssi: cell("rssi").map(|v| v as f32),
+        pci: cell("pci").map(|v| v as u32),
+        cell_id: cell("ci").map(|v| v as u32),
+        tac: cell("tac").map(|v| v as u32),
+        earfcn: cell("earfcn").map(|v| v as u32),
+        band,
+        mcc: text("mcc"),
+        mnc: text("mnc"),
+        hotspot_clients: parse_neigh(neigh),
+        ..Default::default()
+    }
+}
+
 async fn poll(cfg: &Config, info: &mut Option<(Option<String>, Option<String>)>) -> Result<PhoneStatus> {
+    if in_termux() {
+        let mut st = read_termux(info).await?;
+        st.transport = Some("local".to_string());
+        return Ok(st);
+    }
     let mut last_err = anyhow!("no adb transport configured");
     for (target, kind) in transports(cfg) {
         if kind == "wifi" {
@@ -309,6 +421,36 @@ mod tests {
             .filter_map(|l| l.split_once('='))
             .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
             .collect()
+    }
+
+    #[test]
+    fn parses_termux_api_json() {
+        // Termux:API output shape; radio values are the vivo Y03 readings from
+        // 2026-11-11, identifiers come from the private .env (skipped without it).
+        let env = private_env();
+        let hex = |k: &str| env.get(k).and_then(|v| u32::from_str_radix(v, 16).ok());
+        let cell = hex("PHONE_CELL_ID");
+        let battery = r#"{"health":"GOOD","percentage":99,"plugged":"PLUGGED_USB","status":"CHARGING","temperature":30.8}"#;
+        let ci = cell.map(|c| format!(r#","ci":{c}"#)).unwrap_or_default();
+        let cells = format!(
+            r#"[{{"type":"lte","registered":true,"rsrp":-85,"rsrq":-8,"rssnr":21,"rssi":-77,"pci":55,"earfcn":1650,"bands":[3],"mcc":"621","mnc":"30"{ci}}},
+                {{"type":"lte","registered":false,"rsrp":-101,"pci":12,"ci":2147483647}}]"#
+        );
+        let p = parse_termux(battery, &cells, "");
+        assert_eq!(p.battery_level, Some(99));
+        assert_eq!(p.battery_temp_c, Some(30.8));
+        assert_eq!(p.charging, Some(true));
+        assert_eq!(p.usb_powered, Some(true));
+        assert_eq!(p.rsrp, Some(-85.0));
+        assert_eq!(p.sinr, Some(21.0));
+        assert_eq!(p.pci, Some(55)); // the registered cell, not the neighbour
+        assert_eq!(p.band, Some(3));
+        assert_eq!(p.mcc.as_deref(), Some("621"));
+        assert_eq!(p.cell_id, cell);
+        // Garbage in → nothing out, never a panic.
+        let empty = parse_termux("not json", "", "");
+        assert_eq!(empty.rsrp, None);
+        assert_eq!(empty.battery_level, None);
     }
 
     #[test]

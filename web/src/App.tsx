@@ -4,11 +4,13 @@ import { startPulse, stopPulse } from './lib/rhcs';
 import { useStore } from './lib/store';
 import { AimMode } from './pages/AimMode';
 import { AudioPage } from './pages/Audio';
+import { BoostPage } from './pages/Boost';
 import { ControlPage } from './pages/Control';
 import { LogPage } from './pages/Log';
 import { NetworkPage } from './pages/Network';
 import { PhonePage } from './pages/Phone';
 import { SignalPage } from './pages/Signal';
+import { TowersPage } from './pages/Towers';
 
 let started = false;
 
@@ -43,6 +45,8 @@ export function App() {
         <TopBar />
         <main id="main" className="app__content" tabIndex={-1}>
           {route === 'signal' && <SignalPage />}
+          {route === 'boost' && <BoostPage />}
+          {route === 'towers' && <TowersPage />}
           {route === 'phone' && <PhonePage />}
           {route === 'network' && <NetworkPage />}
           {route === 'audio' && <AudioPage />}

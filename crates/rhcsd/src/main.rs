@@ -4,10 +4,13 @@
 //! the rest keeps working and the missing one reconnects by itself.
 
 mod api;
+mod boost;
+mod links;
 mod phone;
 mod router_task;
 mod scan_task;
 mod state;
+mod towers;
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -20,6 +23,8 @@ async fn main() -> Result<()> {
     tokio::spawn(router_task::run(s.clone()));
     tokio::spawn(phone::run(s.clone()));
     tokio::spawn(scan_task::run(s.clone()));
+    tokio::spawn(towers::run(s.clone()));
+    tokio::spawn(towers::geolocate(s.clone()));
 
     let app = api::router(s.clone());
     let listener = tokio::net::TcpListener::bind(&cfg.bind)

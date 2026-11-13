@@ -178,6 +178,10 @@ pub struct AppState {
     pub scan_now: Notify,
     pub relogin: AtomicBool,
     pub oui: OuiDb,
+    /// Game Boost measurements (see boost.rs).
+    pub boost: crate::boost::Boost,
+    /// Towers seen, handovers, tower locations and home location (see towers.rs).
+    pub towers: crate::towers::Towers,
 }
 
 impl AppState {
@@ -203,6 +207,8 @@ impl AppState {
             scan_now: Notify::new(),
             relogin: AtomicBool::new(false),
             oui: OuiDb::load(),
+            boost: crate::boost::Boost::new(),
+            towers: crate::towers::Towers::new(),
         })
     }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { NotifyToggle } from '../components/NotifyToggle';
 import { Constellation, deviceKey, deviceName, KIND_LABEL, kindOf, type Kind } from '../components/Constellation';
 import { Badge, Empty, Icon, KV, Panel, Segmented } from '../components/ui';
 import { fmt, fmtAgo, fmtDateTime, str } from '../lib/format';
@@ -233,6 +234,7 @@ export function NetworkPage() {
           <h1 className="pagehead__title">Network</h1>
         </div>
         <div className="pagehead__actions">
+          <NotifyToggle />
           <Segmented
             label="View"
             value={mode}
