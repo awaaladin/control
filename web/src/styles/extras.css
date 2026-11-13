@@ -281,3 +281,33 @@
     font-size: 9px;
   }
 }
+
+/* ------------------------------------------------------------------ towers: where is the best network */
+.where {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+@media (max-width: 860px) {
+  .where { grid-template-columns: 1fr; }
+}
+.where__lead { font-size: 16px; margin: 0 0 10px; }
+.where__spots { list-style: none; margin: 0 0 12px; padding: 0; }
+.where__spots li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+.where__spots li + li { border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.where__spots li.is-best { background: rgba(80, 230, 170, 0.08); }
+.where__spot { font-weight: 600; }
+.where__now { margin: 6px 0 0; font-size: 14px; }
+.where__tower { display: flex; gap: 18px; align-items: flex-start; }
+.where__arrow { width: 84px; height: 84px; flex: 0 0 84px; transition: transform 0.6s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .where__arrow { transition: none; }
+}

@@ -1,6 +1,7 @@
 import { TowerMap } from '../components/TowerMap';
 import { Badge, Empty, Panel } from '../components/ui';
 import { bandLabel, fmt, fmtAgo, fmtDateTime, fmtDuration, grade, isNum } from '../lib/format';
+import { load, type MarkedSpot } from '../lib/prefs';
 import { useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import {
@@ -15,6 +16,135 @@ import {
 import '../styles/extras.css';
 
 const cellName = (enb: number, sector: number) => `eNB ${enb} · ${sector}`;
+
+const COMPASS_WORDS: Record<string, string> = {
+  N: 'north', NNE: 'north-north-east', NE: 'north-east', ENE: 'east-north-east',
+  E: 'east', ESE: 'east-south-east', SE: 'south-east', SSE: 'south-south-east',
+  S: 'south', SSW: 'south-south-west', SW: 'south-west', WSW: 'west-south-west',
+  W: 'west', WNW: 'west-north-west', NW: 'north-west', NNW: 'north-north-west',
+};
+
+function distanceWords(m: number): string {
+  return m < 1000 ? `about ${Math.round(m / 10) * 10} m` : `about ${fmt(m / 1000, 1)} km`;
+}
+
+/** Arrow pointing toward the tower (0° = north, up). */
+function Arrow({ deg }: { deg: number }) {
+  return (
+    <svg className="where__arrow" viewBox="0 0 64 64" aria-hidden="true" style={{ transform: `rotate(${deg}deg)` }}>
+      <circle cx="32" cy="32" r="29" fill="none" stroke="currentColor" strokeOpacity=".18" strokeWidth="2" />
+      <path d="M32 9 L42 34 L32 29 L22 34 Z" fill="var(--accent)" />
+      <text x="32" y="58" textAnchor="middle" fontSize="8" fill="currentColor" opacity=".5" transform={`rotate(${-deg} 32 32)`}>
+        N↑
+      </text>
+    </svg>
+  );
+}
+
+/**
+ * Side by side, in plain words (no coordinates): where in the house you got
+ * the best signal (Aim-mode spots + right now) and where the tower is.
+ */
+function WhereBest({ v }: { v: TowersView }) {
+  const t = useStore((s) => s.telemetry);
+  const spots = load<MarkedSpot[]>('spots', [])
+    .filter((s) => isNum(s.sinr))
+    .sort((a, b) => (b.sinr ?? -99) - (a.sinr ?? -99));
+  const best = spots[0];
+  const byKey = new Map(v.cells.map((c) => [c.key, c]));
+  const routerCell = v.serving.router ? byKey.get(v.serving.router) : undefined;
+  const phoneCell = v.serving.phone ? byKey.get(v.serving.phone) : undefined;
+  const towerCell = routerCell ?? phoneCell;
+  const located = towerCell && isNum(towerCell.distance_m) && isNum(towerCell.bearing_deg);
+  const dir = towerCell?.compass ? COMPASS_WORDS[towerCell.compass] ?? towerCell.compass : null;
+
+  return (
+    <section className="where" aria-label="Where you get the best network">
+      <Panel kicker="In your home" title="Your spots">
+        {spots.length ? (
+          <>
+            <p className="where__lead">
+              Best so far: <strong>{best.label}</strong> with SINR{' '}
+              <span className={`num g-${grade('sinr', best.sinr)}`}>{fmt(best.sinr, 1)} dB</span> ({grade('sinr', best.sinr)})
+            </p>
+            <ol className="where__spots">
+              {spots.slice(0, 8).map((s, i) => (
+                <li key={s.id} className={i === 0 ? 'is-best' : ''}>
+                  <span className="where__spot">{s.label}</span>
+                  <span className={`num g-${grade('sinr', s.sinr)}`}>{fmt(s.sinr, 1)} dB</span>
+                  <span className="muted small num">{fmt(s.rsrp)} dBm</span>
+                </li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          <p className="muted">
+            No spots marked yet. Open <strong>Signal → Aim mode</strong>, carry the router to different places (window,
+            shelf, upstairs…) and press <strong>Mark spot</strong> at each one. They'll be ranked here.
+          </p>
+        )}
+        <p className="where__now">
+          Right now:{' '}
+          {isNum(t?.sinr) ? (
+            <>
+              SINR <span className={`num g-${grade('sinr', t?.sinr)}`}>{fmt(t?.sinr, 1)} dB</span> ({grade('sinr', t?.sinr)})
+              {best && isNum(best.sinr) && isNum(t?.sinr) ? (
+                <span className="muted">
+                  {' '}
+                  · {t!.sinr! >= best.sinr! ? 'as good as your best spot' : `${fmt(best.sinr! - t!.sinr!, 1)} dB below "${best.label}"`}
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <span className="muted">no router reading</span>
+          )}
+        </p>
+      </Panel>
+
+      <Panel kicker="Where the signal comes from" title="Your tower">
+        {towerCell ? (
+          <div className="where__tower">
+            {located ? <Arrow deg={towerCell.bearing_deg!} /> : null}
+            <div>
+              <p className="where__lead">
+                {located ? (
+                  <>
+                    The tower is <strong>{distanceWords(towerCell.distance_m!)}</strong> away, to the <strong>{dir}</strong>.
+                  </>
+                ) : (
+                  <>
+                    You're on tower <strong>{towerCell.enb}</strong>, antenna (sector) <strong>{towerCell.sector}</strong>.
+                  </>
+                )}
+              </p>
+              <p className="muted small">
+                {routerCell ? `Router: ${bandLabel(routerCell.bands[0])}` : ''}
+                {routerCell && phoneCell ? ' · ' : ''}
+                {phoneCell ? `Phone: ${bandLabel(phoneCell.bands[0])}` : ''}
+                {routerCell && phoneCell && routerCell.enb === phoneCell.enb ? ' · both on the same tower' : ''}
+              </p>
+              <p>
+                {located ? (
+                  <>
+                    Tip: put the router on the <strong>{dir}</strong> side of the house, high up and near a window facing
+                    that way. Walls and metal between it and the tower cost the most signal.
+                  </>
+                ) : (
+                  <span className="muted">
+                    To show the tower's direction and distance, add an OpenCellID key and share this device's location
+                    (see below). Until then, your marked spots on the left are the best guide.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="muted">No tower reported yet. It appears as soon as the router or phone reports its cell.</p>
+        )}
+      </Panel>
+    </section>
+  );
+}
 
 function Sig({ st }: { st: SourceStats | null }) {
   if (!st) return <span className="muted">—</span>;
@@ -238,6 +368,7 @@ export function TowersPage() {
   return (
     <div className="page page--towers">
       {head}
+      <WhereBest v={v} />
       {v.key_configured ? <MapPanel v={v} /> : <NoKey />}
 
       {v.best ? (
