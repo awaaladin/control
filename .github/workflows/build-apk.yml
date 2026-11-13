@@ -18,6 +18,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Needed to update the public download release below.
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: android
@@ -41,3 +44,19 @@ jobs:
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/*.apk
+
+      # The website's "Download the Android app" button points at this release, so the
+      # link never changes and always serves the newest build.
+      - name: Publish APK to the download release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk pulse.apk
+          gh release delete android-latest --cleanup-tag --yes || true
+          gh release create android-latest pulse.apk \
+            --target "$GITHUB_SHA" \
+            --title "PULSE for Android (latest)" \
+            --notes "Debug build of commit ${GITHUB_SHA::7}. Open the file after downloading and allow installing from this source once." \
+            --latest
