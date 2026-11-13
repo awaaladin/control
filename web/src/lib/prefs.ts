@@ -25,6 +25,10 @@ export function save(key: string, value: unknown): void {
 export interface Prefs {
   /** Explicit backend URL; empty means auto-detect. */
   baseUrl: string;
+  /** Backends to look for automatically (laptop, phone hub, another place…). */
+  hubs: string[];
+  /** The backend that answered last time; tried first next time. */
+  lastGood: string;
   token: string;
   demo: boolean;
   sound: boolean;
@@ -33,6 +37,8 @@ export interface Prefs {
 
 export const defaultPrefs: Prefs = {
   baseUrl: '',
+  hubs: [],
+  lastGood: '',
   token: '',
   demo: false,
   sound: false,
@@ -42,6 +48,11 @@ export const defaultPrefs: Prefs = {
 export function loadPrefs(): Prefs {
   return {
     baseUrl: load('baseUrl', defaultPrefs.baseUrl),
+    hubs: (() => {
+      const v = load<unknown>('hubs', []);
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+    })(),
+    lastGood: load('lastGood', defaultPrefs.lastGood),
     token: load('token', defaultPrefs.token),
     demo: load('demo', defaultPrefs.demo),
     sound: load('sound', defaultPrefs.sound),

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Badge, ErrorExplain, Icon, KV, Panel, Switch } from '../components/ui';
 import { explainError, type ErrorSource } from '../lib/explain';
 import { fmtAgo, fmtDuration, isNum, str } from '../lib/format';
-import { api, goLive, normalizeUrl, refreshSettings } from '../lib/rhcs';
+import { addHub, api, goLive, normalizeUrl, refreshSettings, removeHub } from '../lib/rhcs';
 import { confirmAction, toast, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import type { RouterAction } from '../lib/types';
@@ -75,14 +75,22 @@ export function ControlPage() {
     const next = normalizeUrl(url);
     const ok = await confirmAction({
       title: 'Save backend settings?',
-      body: next ? `PULSE will reconnect to ${next}.` : 'PULSE will auto-detect the backend (same origin if served by rhcsd, otherwise http://localhost:7878).',
+      body: next
+        ? `PULSE will remember ${next} and search it together with the other saved backends.`
+        : 'PULSE will keep searching its saved backends and this device automatically.',
       confirmLabel: 'Save & reconnect',
     });
     if (!ok) return;
-    setPrefs({ baseUrl: next, token: token.trim() });
-    setUrl(next);
-    toast('ok', 'Backend settings saved', next || 'auto-detect');
-    void goLive();
+    // The typed address joins the searched list; a forced single address is cleared so
+    // PULSE can always fall back to the others (laptop, phone hub…).
+    setPrefs({ baseUrl: '', token: token.trim() });
+    setUrl('');
+    if (next && !addHub(next)) {
+      toast('error', 'That doesn’t look like an address', 'Try something like 192.168.0.245:7878');
+      return;
+    }
+    if (!next) void goLive();
+    toast('ok', 'Backend settings saved', next || 'searching all saved backends');
   };
 
   const r = sources?.router;
@@ -217,6 +225,31 @@ export function ControlPage() {
               </button>
             </div>
           </form>
+          <div className="field field--wide">
+            <span className="field__label">Backends PULSE looks for automatically</span>
+            <ul className="hubs">
+              {[
+                { url: prefs.lastGood, label: 'last one that worked', removable: false },
+                { url: 'http://localhost:7878', label: 'this device (phone hub or laptop)', removable: false },
+                ...prefs.hubs.map((h) => ({ url: h, label: 'saved', removable: true })),
+              ]
+                .filter((h, i, a) => h.url && a.findIndex((x) => x.url === h.url) === i)
+                .map((h) => (
+                  <li key={h.url}>
+                    <span>
+                      <span className="num">{h.url.replace(/^https?:\/\//, '')}</span> <span className="muted small">{h.label}</span>
+                      {h.url === baseUrl ? <> <Badge tone="good">connected</Badge></> : null}
+                    </span>
+                    {h.removable ? (
+                      <button type="button" className="btn btn--small" onClick={() => removeHub(h.url)}>
+                        Remove
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+            </ul>
+            <span className="muted small">Add one in the box above and press Save &amp; reconnect: it's remembered and searched every time.</span>
+          </div>
           <div className="settings-toggles">
             <Switch
               checked={prefs.sound}

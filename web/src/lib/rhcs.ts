@@ -87,15 +87,77 @@ async function probeHealth(base: string, timeoutMs = 3500): Promise<Health | nul
   }
 }
 
+/**
+ * Every place PULSE looks for the home system, best first:
+ * the address you set, the one that worked last time, your saved backends,
+ * this page's own server (when rhcsd serves PULSE), then this device (the
+ * phone hub or the laptop itself).
+ */
+export function candidateUrls(): string[] {
+  const p = get().prefs;
+  const list = [
+    normalizeUrl(p.baseUrl),
+    normalizeUrl(p.lastGood),
+    ...p.hubs.map(normalizeUrl),
+    location.port === DEFAULT_PORT || /^https?:$/.test(location.protocol) ? sameOrigin() : '',
+    FALLBACK_URL,
+  ].filter(Boolean);
+  // A hosted https page can't call a plain-http address on your network (browser rule),
+  // except this device itself; those are still listed so the card can explain it.
+  return [...new Set(list)];
+}
+
+/** True when the browser will refuse to call this address from this page. */
+export function blockedByBrowser(url: string): boolean {
+  return location.protocol === 'https:' && /^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(url);
+}
+
+export interface HubProbe {
+  url: string;
+  ok: boolean;
+  blocked: boolean;
+}
+
+/** Last search result, shown on the "connection interrupted" card. */
+export let lastSearch: HubProbe[] = [];
+
 export async function resolveBaseUrl(): Promise<string> {
-  const pref = normalizeUrl(get().prefs.baseUrl);
-  if (pref) return pref;
-  if (location.port === DEFAULT_PORT) return sameOrigin();
-  if (location.protocol.startsWith('http')) {
-    const h = await probeHealth(sameOrigin(), 1500);
-    if (h) return sameOrigin();
+  const urls = candidateUrls();
+  const probes = await Promise.all(
+    urls.map(async (url): Promise<HubProbe> => {
+      const blocked = blockedByBrowser(url);
+      if (blocked) return { url, ok: false, blocked };
+      return { url, ok: (await probeHealth(url, 2500)) !== null, blocked };
+    }),
+  );
+  lastSearch = probes;
+  const hit = probes.find((p) => p.ok);
+  if (hit) {
+    if (get().prefs.lastGood !== hit.url) get().setPrefs({ lastGood: hit.url });
+    return hit.url;
   }
-  return FALLBACK_URL;
+  return urls[0] ?? FALLBACK_URL;
+}
+
+/** Save a backend address and connect to it now. Returns false if it isn't a usable address. */
+export function addHub(raw: string): boolean {
+  const url = normalizeUrl(raw);
+  try {
+    new URL(url);
+  } catch {
+    return false;
+  }
+  if (!url) return false;
+  const p = get().prefs;
+  if (!p.hubs.includes(url)) get().setPrefs({ hubs: [...p.hubs, url] });
+  get().setPrefs({ lastGood: url });
+  void goLive();
+  return true;
+}
+
+export function removeHub(url: string): void {
+  const p = get().prefs;
+  get().setPrefs({ hubs: p.hubs.filter((h) => h !== url), lastGood: p.lastGood === url ? '' : p.lastGood });
 }
 
 // ---------------------------------------------------------------- REST
@@ -290,7 +352,21 @@ function scheduleReconnect(gen: number) {
   const delay = Math.min(10_000, 500 * 2 ** retry) * (0.8 + Math.random() * 0.4);
   retry = Math.min(retry + 1, 6);
   window.clearTimeout(reconnectTimer);
-  reconnectTimer = window.setTimeout(() => openWs(gen), delay);
+  reconnectTimer = window.setTimeout(() => void reconnectNow(gen), delay);
+}
+
+/** Look for the home system again (all known places), then reopen the live feed. */
+async function reconnectNow(gen: number) {
+  if (gen !== generation) return;
+  const base = await resolveBaseUrl();
+  if (gen !== generation) return;
+  if (base !== get().baseUrl) {
+    samples.clear();
+    phoneSamples.clear();
+    get().resetData();
+    set({ baseUrl: base });
+  }
+  openWs(gen);
 }
 
 function openWs(gen: number) {

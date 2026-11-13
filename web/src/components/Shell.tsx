@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { fmtAgo, fmtTime } from '../lib/format';
-import { goLive } from '../lib/rhcs';
+import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl } from '../lib/rhcs';
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import { Icon } from './ui';
@@ -206,18 +206,71 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
   const telemetryAt = useStore((s) => s.telemetryAt);
   const now = useNow(1000);
   const [downSince, setDownSince] = useState<number | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [addr, setAddr] = useState('');
+  const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (conn === 'live' || conn === 'connecting') setDownSince(null);
     else setDownSince((d) => d ?? Date.now());
+    if (conn === 'live') {
+      setHidden(false);
+      setNote(null);
+    }
   }, [conn]);
 
   const down = conn !== 'live' && (unreachable || (downSince !== null && now - downSince > 4000));
   if (!down) return null;
 
-  // An https page (e.g. the hosted copy) can't call a plain-http backend other than localhost.
-  const blockedByHttps =
-    location.protocol === 'https:' && /^http:\/\//.test(baseUrl || '') && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(baseUrl || '');
+  const retry = async () => {
+    setBusy(true);
+    setNote(null);
+    await goLive();
+    setBusy(false);
+    if (useStore.getState().conn !== 'live') {
+      const n = lastSearch.length;
+      setNote(`Looked in ${n} place${n === 1 ? '' : 's'}: no answer yet. It keeps searching on its own.`);
+    }
+  };
+
+  const connectTo = async () => {
+    const url = normalizeUrl(addr);
+    if (!addHub(addr)) {
+      setNote('That doesn’t look like an address. Try something like 192.168.0.245:7878');
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    // addHub started the connection; give it a moment, then say what happened.
+    await new Promise((r) => setTimeout(r, 3500));
+    setBusy(false);
+    if (useStore.getState().conn !== 'live') {
+      setNote(
+        blockedByBrowser(url)
+          ? 'Saved. This secure page isn’t allowed to call that address, so open it directly with the button below.'
+          : `Saved ${url}, but nothing answered there yet. Is rhcsd running, and are you on the same network?`,
+      );
+    }
+  };
+
+  const typed = addr.trim() ? normalizeUrl(addr) : '';
+  const direct = typed && blockedByBrowser(typed) ? typed : '';
+
+  if (hidden) {
+    return (
+      <div className="unreach-bar" role="status">
+        <span className="dot dot--off" aria-hidden="true" />
+        <span>Connection interrupted</span>
+        <button type="button" className="btn btn--small btn--accent" onClick={() => void retry()} disabled={busy}>
+          {busy ? 'Searching…' : 'Retry'}
+        </button>
+        <button type="button" className="btn btn--small" onClick={() => setHidden(false)}>
+          Details
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="unreach" role="alertdialog" aria-labelledby="unreach-title">
@@ -227,35 +280,78 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
           Connection interrupted
         </h2>
         <p className="muted">
-          PULSE can't reach your home system right now. The laptop may be off, asleep, or not on this network. PULSE keeps
-          trying and reconnects by itself as soon as it's back.
+          PULSE can't reach your home system right now. It's looking in several places and reconnects by itself as soon as
+          one answers.
         </p>
-        <dl className="kvs">
-          <div className="kv">
-            <dt className="kv__k">Trying</dt>
-            <dd className="kv__v num">{baseUrl || '…'}</dd>
-          </div>
-          <div className="kv">
-            <dt className="kv__k">Last data</dt>
-            <dd className="kv__v num">{telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</dd>
-          </div>
-        </dl>
-        <ul className="unreach__tips muted">
-          {blockedByHttps ? (
-            <li>
-              This secure page can't open plain <span className="num">http://</span> addresses on your home network. On the
-              same Wi-Fi, open <span className="num">{baseUrl}</span> directly instead.
+
+        <ul className="unreach__looked">
+          {(lastSearch.length ? lastSearch : [{ url: baseUrl || '…', ok: false, blocked: false }]).map((p) => (
+            <li key={p.url}>
+              <span className={`dot ${p.ok ? 'dot--ok' : 'dot--off'}`} aria-hidden="true" />
+              <span className="num unreach__url">{p.url.replace(/^https?:\/\//, '')}</span>
+              <span className="muted small">{p.ok ? 'answered' : p.blocked ? 'blocked by browser rule' : 'no answer'}</span>
             </li>
-          ) : null}
-          <li>On the laptop: make sure rhcsd is running (it prints "listening on … 7878").</li>
-          <li>On a phone or another device: be on the same Wi-Fi as the laptop, and check the address in Backend settings.</li>
+          ))}
+        </ul>
+        <p className="muted small">Last data: {telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</p>
+
+        <form
+          className="unreach__add"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void connectTo();
+          }}
+        >
+          <label className="field field--wide">
+            <span className="field__label">Know where it is? Type its address</span>
+            <input
+              className="input num"
+              value={addr}
+              onChange={(e) => setAddr(e.target.value)}
+              placeholder="192.168.0.245:7878"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+          </label>
+          <button type="submit" className="btn btn--accent" disabled={busy || !addr.trim()}>
+            {busy ? 'Connecting…' : 'Save & connect'}
+          </button>
+        </form>
+
+        {direct ? (
+          <a className="btn btn--accent unreach__direct" href={direct}>
+            Open {direct.replace(/^https?:\/\//, '')} directly
+          </a>
+        ) : null}
+        {note ? (
+          <p className="unreach__note" role="status">
+            {note}
+          </p>
+        ) : null}
+
+        <ul className="unreach__tips muted">
+          <li>On the laptop: rhcsd must be running (it prints "listening on … 7878").</li>
+          <li>On the phone: start the hub in Termux with <span className="num">~/rhcs/start.sh</span>, then Retry: this device is searched automatically.</li>
+          <li>Phone and laptop on the same Wi-Fi or hotspot? Open the laptop's address directly (button above) and it works without any setup.</li>
         </ul>
         <div className="unreach__actions">
-          <button type="button" className="btn btn--accent" onClick={() => void goLive()}>
-            Retry now
+          <button type="button" className="btn btn--accent" onClick={() => void retry()} disabled={busy}>
+            {busy ? 'Searching…' : 'Retry now'}
           </button>
-          <button type="button" className="btn" onClick={onSettings}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setHidden(true);
+              onSettings();
+            }}
+          >
             Backend settings
+          </button>
+          <button type="button" className="btn" onClick={() => setHidden(true)}>
+            Hide
           </button>
         </div>
       </div>
