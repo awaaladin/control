@@ -400,3 +400,32 @@
 /* saved backends list (Control → Settings) */
 .hubs { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .hubs li { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; font-size: 13px; }
+
+/* ------------------------------------------------------------------ "Download the Android app" */
+.getapp {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(43, 227, 177, 0.07);
+  border: 1px solid rgba(43, 227, 177, 0.35);
+}
+.getapp__text { display: grid; gap: 4px; font-size: 13.5px; }
+.getapp__text strong { font-size: 15px; }
+.getapp__text span { opacity: 0.85; }
+.getapp .btn { justify-self: start; text-decoration: none; }
+.getapp-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  color: var(--accent, #2be3b1);
+  border: 1px solid rgba(43, 227, 177, 0.5);
+  background: rgba(43, 227, 177, 0.08);
+}
+.getapp-pill:hover { background: rgba(43, 227, 177, 0.18); }

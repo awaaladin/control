@@ -3,6 +3,7 @@ import { fmtAgo, fmtTime } from '../lib/format';
 import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl, setBackendToken } from '../lib/rhcs';
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
+import { AppDownload } from './AppDownload';
 import { Icon } from './ui';
 
 export type Route = 'signal' | 'boost' | 'towers' | 'phone' | 'network' | 'audio' | 'control' | 'log';
@@ -116,6 +117,7 @@ export function TopBar() {
         <span className="topbar__model">{router?.model || 'router'}</span>
         <span className="topbar__host num">{router?.host || '—'}</span>
       </div>
+      <AppDownload variant="pill" />
       <div className="topbar__clock num" aria-label="Local time">
         {fmtTime(now)}
       </div>
@@ -375,6 +377,7 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
         </ul>
         <p className="muted small">Last data: {telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</p>
 
+        <AppDownload variant="card" />
         {location.protocol === 'https:' ? (
           <p className="muted small">This secure page can't open addresses like 10.x.x.x directly; open the address as its own page instead.</p>
         ) : null}

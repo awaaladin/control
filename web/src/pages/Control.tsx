@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { AppDownload } from '../components/AppDownload';
 import { Badge, ErrorExplain, Icon, KV, Panel, Switch } from '../components/ui';
 import { explainError, type ErrorSource } from '../lib/explain';
 import { fmtAgo, fmtDuration, isNum, str } from '../lib/format';
@@ -250,6 +251,10 @@ export function ControlPage() {
               extra={<KV k="State" v={sc?.running ? 'scanning' : 'idle'} />}
             />
           </div>
+        </Panel>
+
+        <Panel title="Android app" kicker="Download" className="ctl-app">
+          <AppDownload variant="card" />
         </Panel>
 
         <Panel title="Settings" kicker="stored in this browser" className="ctl-settings">
