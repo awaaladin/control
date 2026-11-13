@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { fmtAgo, fmtTime } from '../lib/format';
-import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl } from '../lib/rhcs';
+import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl, setBackendToken } from '../lib/rhcs';
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import { Icon } from './ui';
@@ -210,6 +210,8 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
   const [busy, setBusy] = useState(false);
   const [addr, setAddr] = useState('');
   const [note, setNote] = useState<string | null>(null);
+  const authIssue = useStore((s) => s.authIssue);
+  const [tok, setTok] = useState('');
 
   useEffect(() => {
     if (conn === 'live' || conn === 'connecting') setDownSince(null);
@@ -254,6 +256,79 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
     }
   };
 
+  const submitToken = () => {
+    if (!tok.trim()) return;
+    setBackendToken(baseUrl, tok);
+    setTok('');
+    setNote(null);
+  };
+
+  if (authIssue && !hidden) {
+    const host = baseUrl.replace(/^https?:\/\//, '');
+    const text: Record<NonNullable<typeof authIssue>, [string, string]> = {
+      needs: ['This backend needs an access token', `${host} answered, but it only talks to PULSE when you give it the access token (RHCSD_TOKEN in the .env on that device).`],
+      wrong: ['Wrong access token', `${host} rejected the token saved in this browser. Check it against RHCSD_TOKEN in the .env on that device, then enter it again.`],
+      locked: ['Too many wrong attempts', `${host} is ignoring this address for a few minutes after repeated wrong tokens. Wait, then enter the right token.`],
+      forbidden: ['Remote access is not set up on that device', `${host} refuses remote callers until RHCSD_TOKEN of at least 20 characters is set in its .env. Set it there, restart rhcsd, then retry.`],
+    };
+    const [title, body] = text[authIssue];
+    return (
+      <div className="unreach" role="alertdialog" aria-labelledby="unreach-title">
+        <div className="unreach__card panel">
+          <div className="panel__kicker">Home system</div>
+          <h2 id="unreach-title" className="unreach__title">
+            {title}
+          </h2>
+          <p className="muted">{body}</p>
+          {authIssue !== 'forbidden' ? (
+            <form
+              className="unreach__add"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitToken();
+              }}
+            >
+              <label className="field field--wide">
+                <span className="field__label">Access token for {host}</span>
+                <input
+                  className="input num"
+                  type="password"
+                  value={tok}
+                  onChange={(e) => setTok(e.target.value)}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </label>
+              <button type="submit" className="btn btn--accent" disabled={!tok.trim()}>
+                Save token & connect
+              </button>
+            </form>
+          ) : null}
+          <div className="unreach__actions">
+            <button type="button" className="btn btn--accent" onClick={() => void retry()} disabled={busy}>
+              {busy ? 'Checking…' : 'Check again'}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setHidden(true);
+                onSettings();
+              }}
+            >
+              Backend settings
+            </button>
+            <button type="button" className="btn" onClick={() => setHidden(true)}>
+              Hide
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const typed = addr.trim() ? normalizeUrl(addr) : '';
   const direct = typed && blockedByBrowser(typed) ? typed : '';
 
@@ -285,16 +360,24 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
         </p>
 
         <ul className="unreach__looked">
-          {(lastSearch.length ? lastSearch : [{ url: baseUrl || '…', ok: false, blocked: false }]).map((p) => (
+          {(lastSearch.length ? lastSearch : [{ url: baseUrl || '…', ok: false, blocked: false, auth: 'down' as const }]).map((p) => (
             <li key={p.url}>
               <span className={`dot ${p.ok ? 'dot--ok' : 'dot--off'}`} aria-hidden="true" />
               <span className="num unreach__url">{p.url.replace(/^https?:\/\//, '')}</span>
-              <span className="muted small">{p.ok ? 'answered' : p.blocked ? 'blocked by browser rule' : 'no answer'}</span>
+              <span className="muted small">{p.ok ? 'answered' : p.blocked ? 'blocked by browser rule' : p.auth !== 'down' ? 'needs token' : 'no answer'}</span>
+              {p.blocked ? (
+                <a className="btn btn--small btn--accent" href={p.url}>
+                  Open directly
+                </a>
+              ) : null}
             </li>
           ))}
         </ul>
         <p className="muted small">Last data: {telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</p>
 
+        {location.protocol === 'https:' ? (
+          <p className="muted small">This secure page can't open addresses like 10.x.x.x directly; open the address as its own page instead.</p>
+        ) : null}
         <form
           className="unreach__add"
           onSubmit={(e) => {

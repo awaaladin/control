@@ -139,6 +139,9 @@ A **crate** is a Rust package. A **workspace** groups several crates that build 
 | `lan-only.ps1` | **yes** | Makes one network adapter "local only" so internet goes through another one. `-Interface WiFi` or `Ethernet`, `-Undo` to revert |
 | `lab-ethernet.ps1` | **yes** | Gives the Ethernet port a fixed address (default `192.168.50.1`, or `-Ip ...`) for the decoder lab, and opens the firewall for it on Ethernet only. `-Undo` to revert |
 | `decoder-lab.ps1` | no | Acts as DHCP + DNS server for one device on the Ethernet cable and logs everything it says. Only answers the MAC in `DECODER_MAC` |
+| `remote-cloudflare.ps1` | no | Makes sure `RHCSD_TOKEN` is 20+ chars, starts a Cloudflare quick tunnel (cloudflared from `D:\setup\toolchains\cloudflared\`) and prints a pairing link for PULSE. Close the window to stop
+| `remote-tailscale.ps1` | no | Same check, then `tailscale serve --bg 7878`, and prints the pairing link. Stop with `tailscale serve reset` |
+| `termux/remote.sh` | no | The phone-hub version (Termux), plus `termux/README` |
 
 ---
 
@@ -179,7 +182,8 @@ Copy `.env.example` to `.env` and fill it in. Everything private lives here.
 | `LAPTOP_WIFI_MAC`, `HOTSPOT_KNOWN_GIONEE_MAC` | Any key whose name ends in `_MAC` gives that device a friendly name in the UI |
 | `DECODER_IP`, `DECODER_MAC` | Decoder address and MAC (the lab only answers this MAC) |
 | `RHCSD_BIND` | Where `rhcsd` listens (default `0.0.0.0:7878`) |
-| `RHCSD_TOKEN` | Password for actions from other devices (optional) |
+| `RHCSD_TOKEN` | Access token. Optional on your own network (needed for changes from other devices); **required, at least 20 characters, for any tunnel** (see 5.2). Generate with `scripts\remote-cloudflare.ps1` |
+| `RHCSD_LOCK_READS` | `on` = LAN devices need the token to read data too. Default off |
 | `SCAN_CIDRS` | Extra networks to scan, e.g. `192.168.30.0/24` |
 | `SCAN_INTERVAL_S` | Seconds between automatic scans (default 300) |
 | `ADB_PATH` | Path to `adb.exe` if it isn't found automatically |
@@ -251,10 +255,28 @@ reconnects on its own. It prints events as they happen:
 If the backend can't be reached, PULSE can show **demo data**, always under a
 large amber **DEMO** badge, never mixed with live data.
 
-### 5.2 Permissions
-- Reading data: allowed from any device on your network.
-- Changing things (scan now, re-login, settings): allowed from the laptop itself,
-  or from anywhere if the request carries `RHCSD_TOKEN` in the `x-rhcs-token` header.
+### 5.2 Permissions and access classes
+Every request is put in one class (`crates/rhcsd/src/auth.rs`):
+
+| Class | How it is recognised | Reads (`/api/*`, `/ws`) | Changes |
+|---|---|---|---|
+| **local** | TCP peer is loopback and **no** proxy header | open | open if `RHCSD_TOKEN` is unset, else token |
+| **lan** | TCP peer is not loopback (home Wi-Fi, hotspot, Tailscale `100.x` direct) | open, unless `RHCSD_LOCK_READS=on` (then token) | token |
+| **tunnel** | TCP peer is loopback **and** a proxy header is present | **token** | **token** |
+
+Proxy headers: `X-Forwarded-For/Proto/Host`, `Forwarded`, `X-Real-IP`, `Via`, `CF-Connecting-IP`, `CF-Ray`, `CF-Visitor`, `True-Client-IP`, any `Cf-*` or `Tailscale-*`. cloudflared and `tailscale serve` connect from localhost and add such headers, which is how a tunnel is told apart from the laptop itself.
+
+Tunnel rules, with no exceptions:
+- If `RHCSD_TOKEN` is unset or shorter than 20 characters, every `/api/*` and `/ws` request through a tunnel gets **403** `remote_token_not_configured`. It never falls back to open.
+- An unauthenticated tunnel call to `/api/health` gets only `{ok, version, auth_required:true}`.
+- Static files (the dashboard pages themselves) are served openly; they contain no data.
+
+Token sources: `x-rhcs-token: <token>`, `Authorization: Bearer <token>`, or `?token=<token>` (WebSocket only in practice, because browsers cannot set headers there). Compared in constant time; tokens are never logged.
+
+Answers: **401** `token_missing` / `token_wrong`, **403** `remote_token_not_configured`, **429** `too_many_attempts` (with `Retry-After`).
+Brute-force guard: per client address (the real client from `CF-Connecting-IP` / last `X-Forwarded-For` through a tunnel, else the peer address), 10 wrong tokens in a minute lock that address out for 5 minutes. In memory, so a restart clears it.
+
+CORS allows the `x-rhcs-token`, `authorization` and `content-type` request headers and Private Network Access, so the hosted dashboard can call a home device.
 
 ### 5.3 The API (for PULSE, the Kotlin app, or your own scripts)
 | Method + path | Returns |

@@ -3,6 +3,8 @@ import type { DeviceView, Health, PhoneFix, PhoneStatus, RhcsEvent, Settings, So
 import { loadPrefs, save, type Prefs } from './prefs';
 
 export type Conn = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'demo';
+/** Why the backend answered but refused PULSE: no token, wrong token, locked out, or remote access not set up. */
+export type AuthIssue = 'needs' | 'wrong' | 'locked' | 'forbidden';
 export type WindowKey = '1m' | '10m' | '1h' | '24h';
 export const WINDOW_MS: Record<WindowKey, number> = {
   '1m': 60_000,
@@ -35,6 +37,8 @@ export interface PulseState {
   demoReason: 'user' | 'fallback' | null;
   /** Startup could not reach the backend; show the "use demo data" prompt. */
   unreachable: boolean;
+  /** The backend is there but wants an access token (or refused the one sent). */
+  authIssue: AuthIssue | null;
   /** In user-chosen demo mode, the backend answered /api/health. */
   liveAvailable: boolean;
   health: Health | null;
@@ -72,6 +76,7 @@ export const useStore = create<PulseState>()((set, get) => ({
   conn: 'connecting',
   demoReason: null,
   unreachable: false,
+  authIssue: null,
   liveAvailable: false,
   health: null,
   sources: null,

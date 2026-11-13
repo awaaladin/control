@@ -1,7 +1,7 @@
 // Typed rhcsd API client, WebSocket manager and live/demo orchestration.
 
 import { phoneSamples, samples, sampleFromTelemetry } from './buffer';
-import { useStore, toast, WINDOW_MS } from './store';
+import { useStore, toast, WINDOW_MS, type AuthIssue } from './store';
 import type {
   ActionResult,
   DeviceView,
@@ -54,7 +54,33 @@ function sameOrigin(): string {
 function wsUrl(base: string): string {
   const u = new URL(base + '/ws');
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+  // Browsers can't set headers on a WebSocket, so the token goes in the query.
+  const token = tokenFor(base);
+  if (token) u.searchParams.set('token', token);
   return u.toString();
+}
+
+// ---------------------------------------------------------------- access tokens
+/** The token for this backend: its own if saved, else the global one. */
+export function tokenFor(base: string): string {
+  const p = get().prefs;
+  return (p.tokens[normalizeUrl(base)] ?? '').trim() || p.token.trim();
+}
+
+/** Headers carrying the access token (empty when none is saved). */
+export function authHeaders(base: string): Record<string, string> {
+  const t = tokenFor(base);
+  return t ? { 'x-rhcs-token': t } : {};
+}
+
+/** Save the token for one backend ('' removes it) and reconnect. */
+export function setBackendToken(base: string, token: string): void {
+  const url = normalizeUrl(base);
+  const tokens = { ...get().prefs.tokens };
+  if (token.trim()) tokens[url] = token.trim();
+  else delete tokens[url];
+  get().setPrefs({ tokens });
+  void goLive();
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 6000): Promise<{ status: number; data: T | null }> {
@@ -77,14 +103,30 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 6000): 
   }
 }
 
-async function probeHealth(base: string, timeoutMs = 3500): Promise<Health | null> {
+/** How a backend answered: fine, wants a token, rejected ours, locked us out, remote access off, or silence. */
+export type HubAuth = 'ok' | AuthIssue | 'down';
+
+export async function probeHub(base: string, timeoutMs = 3500): Promise<{ auth: HubAuth; health: Health | null }> {
   try {
-    const { status, data } = await fetchJson<Health>(`${base}/api/health`, { cache: 'no-store' }, timeoutMs);
-    if (status === 200 && data && typeof data === 'object' && Array.isArray(data.capabilities)) return data;
-    return null;
+    const { status, data } = await fetchJson<Health & { error?: string }>(
+      `${base}/api/health`,
+      { cache: 'no-store', headers: authHeaders(base) },
+      timeoutMs,
+    );
+    const obj = data && typeof data === 'object' ? data : null;
+    if (status === 200 && obj && Array.isArray(obj.capabilities)) return { auth: 'ok', health: obj };
+    if (status === 200 && obj?.auth_required === true) return { auth: 'needs', health: null };
+    if (status === 401) return { auth: obj?.error === 'token_wrong' ? 'wrong' : 'needs', health: null };
+    if (status === 429) return { auth: 'locked', health: null };
+    if (status === 403 && obj?.error === 'remote_token_not_configured') return { auth: 'forbidden', health: null };
+    return { auth: 'down', health: null };
   } catch {
-    return null;
+    return { auth: 'down', health: null };
   }
+}
+
+async function probeHealth(base: string, timeoutMs = 3500): Promise<Health | null> {
+  return (await probeHub(base, timeoutMs)).health;
 }
 
 /**
@@ -116,6 +158,7 @@ export interface HubProbe {
   url: string;
   ok: boolean;
   blocked: boolean;
+  auth: HubAuth;
 }
 
 /** Last search result, shown on the "connection interrupted" card. */
@@ -126,21 +169,30 @@ export async function resolveBaseUrl(): Promise<string> {
   const probes = await Promise.all(
     urls.map(async (url): Promise<HubProbe> => {
       const blocked = blockedByBrowser(url);
-      if (blocked) return { url, ok: false, blocked };
-      return { url, ok: (await probeHealth(url, 2500)) !== null, blocked };
+      if (blocked) return { url, ok: false, blocked, auth: 'down' };
+      const r = await probeHub(url, 2500);
+      return { url, ok: r.auth === 'ok', blocked, auth: r.auth };
     }),
   );
   lastSearch = probes;
   const hit = probes.find((p) => p.ok);
   if (hit) {
+    useStore.setState({ authIssue: null });
     if (get().prefs.lastGood !== hit.url) get().setPrefs({ lastGood: hit.url });
     return hit.url;
   }
+  // Something answered but wants a token: stay on it and say so.
+  const gated = probes.find((p) => p.auth !== 'down' && p.auth !== 'ok');
+  if (gated) {
+    useStore.setState({ authIssue: gated.auth as AuthIssue });
+    return gated.url;
+  }
+  useStore.setState({ authIssue: null });
   return urls[0] ?? FALLBACK_URL;
 }
 
 /** Save a backend address and connect to it now. Returns false if it isn't a usable address. */
-export function addHub(raw: string): boolean {
+export function addHub(raw: string, token?: string): boolean {
   const url = normalizeUrl(raw);
   try {
     new URL(url);
@@ -150,6 +202,7 @@ export function addHub(raw: string): boolean {
   if (!url) return false;
   const p = get().prefs;
   if (!p.hubs.includes(url)) get().setPrefs({ hubs: [...p.hubs, url] });
+  if (token?.trim()) get().setPrefs({ tokens: { ...p.tokens, [url]: token.trim() } });
   get().setPrefs({ lastGood: url });
   void goLive();
   return true;
@@ -157,7 +210,49 @@ export function addHub(raw: string): boolean {
 
 export function removeHub(url: string): void {
   const p = get().prefs;
-  get().setPrefs({ hubs: p.hubs.filter((h) => h !== url), lastGood: p.lastGood === url ? '' : p.lastGood });
+  const tokens = { ...p.tokens };
+  delete tokens[url];
+  get().setPrefs({ hubs: p.hubs.filter((h) => h !== url), tokens, lastGood: p.lastGood === url ? '' : p.lastGood });
+}
+
+/**
+ * Pairing link: https://.../#hub=<url>&token=<token>. The fragment never goes to
+ * any server. Saves the backend (and token), clears the address bar, and says so.
+ * Returns true when a pairing was applied (addHub has already started connecting).
+ */
+export function applyPairingFromHash(): boolean {
+  const raw = location.hash.replace(/^#/, '');
+  if (!raw.includes('hub=')) return false;
+  const q = new URLSearchParams(raw);
+  const hub = q.get('hub') ?? '';
+  const token = q.get('token') ?? '';
+  try {
+    history.replaceState(null, '', location.pathname + location.search);
+  } catch {
+    /* ignore */
+  }
+  if (!/^https?:\/\//i.test(hub) || !addHub(hub, token)) {
+    toast('error', 'Pairing link not understood', 'It needs a hub address such as https://name.trycloudflare.com');
+    return false;
+  }
+  let host = hub;
+  try {
+    host = new URL(hub).host;
+  } catch {
+    /* keep raw */
+  }
+  toast('ok', `Paired with ${host}`, token ? 'Address and access token saved in this browser.' : 'Address saved. Enter the access token if asked.');
+  return true;
+}
+
+/** Copy-ready pairing link for a saved backend (contains the token if one is saved). */
+export function pairingLink(base: string): { link: string; hasToken: boolean } {
+  const url = normalizeUrl(base);
+  const token = tokenFor(url);
+  const origin = location.protocol === 'https:' ? location.origin : 'https://rhcs-pulse.vercel.app';
+  let frag = `hub=${encodeURIComponent(url)}`;
+  if (token) frag += `&token=${encodeURIComponent(token)}`;
+  return { link: `${origin}/#${frag}`, hasToken: !!token };
 }
 
 // ---------------------------------------------------------------- REST
@@ -172,7 +267,7 @@ async function apiGet<T>(path: string): Promise<T | null> {
   const base = get().baseUrl;
   if (!base) return null;
   try {
-    const { status, data } = await fetchJson<T>(base + path, { cache: 'no-store' });
+    const { status, data } = await fetchJson<T>(base + path, { cache: 'no-store', headers: authHeaders(base) });
     return status === 200 ? data : null;
   } catch {
     return null;
@@ -182,9 +277,7 @@ async function apiGet<T>(path: string): Promise<T | null> {
 async function apiPost(path: string, body: unknown): Promise<PostResult> {
   if (get().conn === 'demo' && demo) return demo.post(path, body);
   const base = get().baseUrl;
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  const token = get().prefs.token.trim();
-  if (token) headers['x-rhcs-token'] = token;
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...authHeaders(base) };
   try {
     const { status, data } = await fetchJson<ActionResult>(base + path, {
       method: 'POST',
@@ -192,7 +285,9 @@ async function apiPost(path: string, body: unknown): Promise<PostResult> {
       body: JSON.stringify(body ?? {}),
     });
     const message = data?.message ?? (status === 200 ? 'done' : `HTTP ${status}`);
-    if (status === 401) {
+    if (status === 429) {
+      toast('error', 'Too many wrong token attempts', 'This backend is ignoring you for a few minutes. Check the token, then try again later.', 8000);
+    } else if (status === 401) {
       const authRequired = get().health?.auth_required;
       toast(
         'error',
@@ -366,6 +461,11 @@ async function reconnectNow(gen: number) {
     get().resetData();
     set({ baseUrl: base });
   }
+  if (get().authIssue) {
+    // Retrying with a missing or wrong token would only add failed attempts.
+    set({ conn: 'offline', unreachable: true });
+    return;
+  }
   openWs(gen);
 }
 
@@ -435,6 +535,7 @@ export async function goLive(): Promise<void> {
     set({ health: h, sources: h.sources ?? null, unreachable: false });
   } else {
     set({ conn: 'offline', unreachable: true });
+    if (get().authIssue) return; // needs a token: wait for the user, no blind retries
   }
   openWs(gen);
   healthTimer = window.setInterval(async () => {
@@ -486,6 +587,7 @@ export function enterDemo(reason: 'user' | 'fallback'): void {
  *  home system is off, PULSE says the connection is interrupted. */
 export function startPulse(): void {
   if (get().prefs.demo) get().setPrefs({ demo: false });
+  if (applyPairingFromHash()) return; // addHub already started the connection
   void goLive();
 }
 

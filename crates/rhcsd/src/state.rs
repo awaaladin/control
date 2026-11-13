@@ -28,6 +28,8 @@ pub fn now_ms() -> i64 {
 pub struct Config {
     pub bind: String,
     pub token: Option<String>,
+    /// RHCSD_LOCK_READS=on: LAN callers need the token for reads too.
+    pub lock_reads: bool,
     pub router_ip: String,
     pub router_password: Option<String>,
     pub router_model: String,
@@ -74,6 +76,7 @@ impl Config {
         Self {
             bind: get("RHCSD_BIND").unwrap_or_else(|| "0.0.0.0:7878".into()),
             token: get("RHCSD_TOKEN"),
+            lock_reads: get("RHCSD_LOCK_READS").is_some_and(|v| matches!(v.to_lowercase().as_str(), "on" | "1" | "true" | "yes")),
             router_ip: get("ROUTER_IP").unwrap_or_else(|| "192.168.0.1".into()),
             router_password: get("ROUTER_ADMIN_PASSWORD"),
             router_model: get("ROUTER_MODEL").unwrap_or_else(|| "ZTE router".into()),

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Badge, ErrorExplain, Icon, KV, Panel, Switch } from '../components/ui';
 import { explainError, type ErrorSource } from '../lib/explain';
 import { fmtAgo, fmtDuration, isNum, str } from '../lib/format';
-import { addHub, api, goLive, normalizeUrl, refreshSettings, removeHub } from '../lib/rhcs';
+import { addHub, api, blockedByBrowser, goLive, normalizeUrl, pairingLink, probeHub, refreshSettings, removeHub, type HubAuth } from '../lib/rhcs';
 import { confirmAction, toast, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import type { RouterAction } from '../lib/types';
@@ -37,6 +37,34 @@ async function doRouterAction(action: RouterAction, label: string, body: string,
   else if (r.status !== 401) toast('error', `${label} failed`, r.message);
 }
 
+const AUTH_LABEL: Record<HubAuth, string> = {
+  ok: 'answered',
+  needs: 'needs token',
+  wrong: 'wrong token',
+  locked: 'too many attempts',
+  forbidden: 'remote access not set up',
+  down: 'no answer',
+};
+
+async function copyPairing(url: string) {
+  const { link, hasToken } = pairingLink(url);
+  if (hasToken) {
+    const ok = await confirmAction({
+      title: 'Copy a link that contains the token?',
+      body: 'Anyone who gets this link can control this backend. Send it only to your own devices (for example a message to yourself) and delete it afterwards. The token is in the part after # which is never sent to any website.',
+      confirmLabel: 'Copy link',
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  try {
+    await navigator.clipboard.writeText(link);
+    toast('ok', 'Pairing link copied', hasToken ? 'Open it on the other device. It includes the token.' : 'No token is saved for this backend, so the link has the address only.');
+  } catch {
+    toast('error', 'Could not copy', 'The browser blocked clipboard access. Copy the address by hand instead.');
+  }
+}
+
 export function ControlPage() {
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
@@ -48,6 +76,7 @@ export function ControlPage() {
   const [interval, setIntervalV] = useState<number>(settings?.interval_s ?? 1);
   const [url, setUrl] = useState(prefs.baseUrl);
   const [token, setToken] = useState(prefs.token);
+  const [probes, setProbes] = useState<Record<string, HubAuth | 'checking'>>({});
 
   useEffect(() => {
     if (isNum(settings?.interval_s)) setIntervalV(settings!.interval_s!);
@@ -55,6 +84,27 @@ export function ControlPage() {
   useEffect(() => {
     if (conn === 'live') void refreshSettings();
   }, [conn]);
+
+  const listed = [
+    { url: prefs.lastGood, label: 'last one that worked', removable: false },
+    { url: 'http://localhost:7878', label: 'this device (phone hub or laptop)', removable: false },
+    ...prefs.hubs.map((h) => ({ url: h, label: 'saved', removable: true })),
+  ].filter((h, i, a) => h.url && a.findIndex((x) => x.url === h.url) === i);
+
+  const recheck = async () => {
+    setProbes(Object.fromEntries(listed.map((h) => [h.url, 'checking' as const])));
+    await Promise.all(
+      listed.map(async (h) => {
+        const r = await probeHub(h.url, 3000);
+        setProbes((p) => ({ ...p, [h.url]: r.auth }));
+      }),
+    );
+  };
+  useEffect(() => {
+    void recheck();
+    // once on opening the page; the button re-runs it (wrong tokens count as failed attempts)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const applyInterval = async () => {
     const ok = await confirmAction({
@@ -85,7 +135,7 @@ export function ControlPage() {
     // PULSE can always fall back to the others (laptop, phone hub…).
     setPrefs({ baseUrl: '', token: token.trim() });
     setUrl('');
-    if (next && !addHub(next)) {
+    if (next && !addHub(next, token)) {
       toast('error', 'That doesn’t look like an address', 'Try something like 192.168.0.245:7878');
       return;
     }
@@ -216,10 +266,10 @@ export function ControlPage() {
             </label>
             <label className="field field--wide">
               <span className="field__label">Token {health?.auth_required ? <Badge tone="fair">required by rhcsd</Badge> : null}</span>
-              <input className="input num" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="x-rhcs-token (optional)" autoComplete="off" />
+              <input className="input num" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="access token (RHCSD_TOKEN)" autoComplete="off" />
             </label>
             <div className="row">
-              <span className="muted small">Token is sent only on control requests.</span>
+              <span className="muted small">Sent with every request to the backend (needed through a tunnel). A pairing link can save a different token per backend.</span>
               <button type="submit" className="btn btn--accent">
                 Save & reconnect
               </button>
@@ -228,26 +278,41 @@ export function ControlPage() {
           <div className="field field--wide">
             <span className="field__label">Backends PULSE looks for automatically</span>
             <ul className="hubs">
-              {[
-                { url: prefs.lastGood, label: 'last one that worked', removable: false },
-                { url: 'http://localhost:7878', label: 'this device (phone hub or laptop)', removable: false },
-                ...prefs.hubs.map((h) => ({ url: h, label: 'saved', removable: true })),
-              ]
-                .filter((h, i, a) => h.url && a.findIndex((x) => x.url === h.url) === i)
-                .map((h) => (
+              {listed.map((h) => {
+                const pr = probes[h.url];
+                return (
                   <li key={h.url}>
                     <span>
-                      <span className="num">{h.url.replace(/^https?:\/\//, '')}</span> <span className="muted small">{h.label}</span>
-                      {h.url === baseUrl ? <> <Badge tone="good">connected</Badge></> : null}
+                      <span className="num">{h.url.replace(/^https?:\/\//, '')}</span> <span className="muted small">{h.label}</span>{' '}
+                      {h.url === baseUrl && conn === 'live' ? <Badge tone="good">connected</Badge> : null}{' '}
+                      {pr ? (
+                        <Badge tone={pr === 'ok' ? 'good' : pr === 'down' || pr === 'checking' ? 'neutral' : 'fair'}>
+                          {pr === 'checking' ? 'checking…' : AUTH_LABEL[pr]}
+                        </Badge>
+                      ) : null}
                     </span>
-                    {h.removable ? (
-                      <button type="button" className="btn btn--small" onClick={() => removeHub(h.url)}>
-                        Remove
+                    <span className="row">
+                      {blockedByBrowser(h.url) ? (
+                        <a className="btn btn--small btn--accent" href={h.url}>
+                          Open directly
+                        </a>
+                      ) : null}
+                      <button type="button" className="btn btn--small" onClick={() => void copyPairing(h.url)}>
+                        Copy pairing link for this backend
                       </button>
-                    ) : null}
+                      {h.removable ? (
+                        <button type="button" className="btn btn--small" onClick={() => removeHub(h.url)}>
+                          Remove
+                        </button>
+                      ) : null}
+                    </span>
                   </li>
-                ))}
+                );
+              })}
             </ul>
+            <button type="button" className="btn btn--small" onClick={() => void recheck()}>
+              Check them again
+            </button>
             <span className="muted small">Add one in the box above and press Save &amp; reconnect: it's remembered and searched every time.</span>
           </div>
           <div className="settings-toggles">

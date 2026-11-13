@@ -4,6 +4,7 @@
 //! the rest keeps working and the missing one reconnects by itself.
 
 mod api;
+mod auth;
 mod boost;
 mod connections;
 mod links;
@@ -44,6 +45,16 @@ async fn main() -> Result<()> {
         cfg.phone_adb_addr.as_deref().map(|a| format!(", wifi {a}")).unwrap_or_default()
     );
     println!("  auth    {}", if cfg.token.is_some() { "token required for changes" } else { "changes allowed from this machine only" });
+    println!(
+        "  remote  {}",
+        match &cfg.token {
+            Some(t) if t.len() >= auth::MIN_REMOTE_TOKEN => "tunnels allowed (token required for everything)",
+            _ => "tunnels refused: set RHCSD_TOKEN of at least 20 characters to use PULSE away from home",
+        }
+    );
+    if cfg.lock_reads {
+        println!("  reads   token required on the LAN too (RHCSD_LOCK_READS)");
+    }
     println!(
         "  admin   {}",
         if s.admin { "yes: PULSE can switch links" } else { "no: link switching off (start rhcsd as administrator to enable it)" }

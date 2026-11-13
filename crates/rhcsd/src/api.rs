@@ -1,11 +1,11 @@
 //! HTTP + WebSocket API. Reads are open on the LAN; anything that changes
 //! state needs the RHCSD_TOKEN (or, if no token is set, a request from this
-//! machine itself).
+//! machine itself). Requests through a tunnel always need the token: see auth.rs.
 
 use crate::state::{now_ms, Shared};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -26,7 +26,13 @@ pub fn router(s: Shared) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any)
+        // `authorization` is not covered by a wildcard, so list the headers.
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            header::AUTHORIZATION,
+            HeaderName::from_static("x-rhcs-token"),
+        ])
         // Lets an https page (e.g. the dashboard on Vercel) call this LAN service.
         .allow_private_network(true);
 
@@ -46,6 +52,7 @@ pub fn router(s: Shared) -> Router {
         .merge(crate::places::routes())
         .merge(crate::connections::routes())
         .merge(crate::switch::routes())
+        .layer(axum::middleware::from_fn_with_state(s.clone(), crate::auth::gate))
         .with_state(s.clone());
 
     let web = s.cfg.web_dir.clone();
@@ -60,23 +67,13 @@ pub fn router(s: Shared) -> Router {
 }
 
 pub(crate) fn authorized(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
-    match &s.cfg.token {
-        Some(token) => {
-            let direct = headers.get("x-rhcs-token").and_then(|v| v.to_str().ok());
-            let bearer = headers
-                .get(header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "));
-            direct == Some(token.as_str()) || bearer == Some(token.as_str())
-        }
-        None => addr.ip().is_loopback(),
-    }
+    crate::auth::check_write(s, addr, headers)
 }
 
 pub(crate) fn denied() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        Json(json!({ "ok": false, "message": "not allowed: send x-rhcs-token, or call from this machine" })),
+        Json(json!({ "ok": false, "message": "not allowed: send the access token (x-rhcs-token), or call from this machine" })),
     )
         .into_response()
 }

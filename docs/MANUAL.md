@@ -286,7 +286,55 @@ Who can do what:
 | Phone/other device with the token | yes | yes |
 | The internet | no | no |
 
-Never forward port 7878 on a router to the internet.
+Never forward port 7878 on a router to the internet. To use PULSE from outside
+your network, see section 3.1.
+
+### 3.1 Using PULSE away from home
+
+PULSE is hosted at https://rhcs-pulse.vercel.app and reads from whichever
+device runs `rhcsd` (the laptop, or the phone hub in Termux). To reach it from
+mobile data you put a private **tunnel** in front of `rhcsd`. Two options; both
+need the **access token** and neither opens a port on your router.
+
+**The lock first.** In `.env` on the device that runs `rhcsd`, `RHCSD_TOKEN` must
+be at least 20 random characters. The scripts below create it for you if it is
+missing. Without it, `rhcsd` refuses every tunnel request (403). Restart `rhcsd`
+after changing `.env`.
+
+**Option A: Cloudflare quick tunnel** (no account, address changes every run)
+1. Laptop: put `cloudflared.exe` in `D:\setup\toolchains\cloudflared\`. Download the
+   `windows-amd64` exe from https://github.com/cloudflare/cloudflared/releases/latest
+   and rename it `cloudflared.exe`. (The script never downloads anything itself.)
+2. Make sure `rhcsd` is running, then run `scripts\remote-cloudflare.ps1`.
+3. Wait for the **pairing link** it prints (also copied to the clipboard). Keep that window open.
+4. Phone: open the link. PULSE saves the backend and token, hides them from the address bar and shows "Paired with ...".
+- Phone hub: in Termux run `~/rhcs/remote.sh` (after `pkg install cloudflared`) and pair the same way. Details in `scripts/termux/README`.
+
+**Option B: Tailscale** (free account, stable address, nothing public)
+1. Install Tailscale on the laptop and on the phone, sign in to the same account. (The Windows installer goes to C:; there is no supported D: install, so decide if that is acceptable. The Android app is unaffected.)
+2. Laptop: run `scripts\remote-tailscale.ps1`. It runs `tailscale serve` and prints a pairing link with your `https://<machine>.<tailnet>.ts.net` address.
+3. Open the link on the phone (which must be signed in to Tailscale).
+- Phone hub in Termux: `pkg install tailscale`, see `scripts/termux/README`.
+
+**Pairing link.** `https://rhcs-pulse.vercel.app/#hub=<address>&token=<token>`. Everything after `#` stays in the browser and is never sent to any server, but anyone who sees the whole link has the token: send it only to yourself and delete it after. You can make one later in **Control -> Settings -> Copy pairing link for this backend**. Several backends (laptop tunnel, phone tunnel) can be paired; PULSE searches them all.
+
+**What the messages mean**
+| PULSE says | Meaning | What to do |
+|---|---|---|
+| This backend needs an access token | The device answered but wants the token | Type `RHCSD_TOKEN` into the box, or open a pairing link |
+| Wrong access token | The saved token differs from `.env` | Re-enter it. Check for a missing character |
+| Too many wrong attempts | 10 wrong tokens in a minute: that address is ignored for 5 minutes | Wait, then enter the right token |
+| Remote access is not set up on that device | `RHCSD_TOKEN` is missing or under 20 characters | Fix `.env`, restart `rhcsd` |
+| Connection interrupted (no token message) | The tunnel is down or the device is off | Restart the tunnel script; Cloudflare addresses change each run |
+
+**What is exposed.** Through the tunnel, with the right token, a person can see
+everything PULSE shows (signal, devices on your network, towers, the phone's
+position) and do what PULSE can do (scan, re-login, link switching). Without
+the token they see only the static dashboard page and `{ok, version}`.
+
+**Stopping.** Close the Cloudflare window (or press Ctrl+C): the address stops working at once. Tailscale: `tailscale serve reset`. The phone: Ctrl+C in Termux. Changing `RHCSD_TOKEN` and restarting `rhcsd` also locks out every previously paired device.
+
+**Never port-forward 7878** on your router. That makes `rhcsd` visible to every scanner on the internet over plain http, with the token sent unencrypted. Tunnels give you https and a token check.
 
 ---
 

@@ -1,0 +1,31 @@
+Phone hub: using PULSE away from home
+=====================================
+
+Copy remote.sh next to start.sh in ~/rhcs on the phone (chmod +x remote.sh).
+start.sh and stop.sh are unchanged.
+
+Lock first
+  RHCSD_TOKEN in ~/rhcs/.env must be at least 20 random characters. remote.sh
+  creates one if missing, then asks you to restart rhcsd (./stop.sh ; ./start.sh).
+  Without the token rhcsd answers every tunnel request with 403.
+
+Option A: Cloudflare quick tunnel (no account)
+  pkg install cloudflared
+  ./start.sh          # rhcsd
+  ./remote.sh         # prints the https://<random>.trycloudflare.com address
+                      # and the pairing link; open the link in any browser
+  The address changes every run. Ctrl+C stops sharing.
+
+Option B: Tailscale (free account, stable address)
+  pkg install tailscale
+  Termux has no VPN permission, so run it in userspace networking mode:
+    tailscaled --tun=userspace-networking --socks5-server=localhost:1055 &
+    tailscale up
+    tailscale serve --bg 7878
+    tailscale serve status        # shows https://<machine>.<tailnet>.ts.net
+  Pairing link: https://rhcs-pulse.vercel.app/#hub=<that address>&token=<RHCSD_TOKEN>
+  Stop sharing: tailscale serve reset
+  Check `tailscale serve --help` if your version prints different syntax.
+
+Never forward port 7878 on a router. Anyone with the pairing link has the
+token: send it only to yourself and delete it.

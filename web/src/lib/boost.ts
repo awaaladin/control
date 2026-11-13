@@ -5,6 +5,7 @@
 import { useEffect } from 'react';
 import { create } from 'zustand';
 import { toast, useStore } from './store';
+import { authHeaders } from './rhcs';
 
 // ---------------------------------------------------------------- HTTP helpers
 
@@ -21,7 +22,12 @@ async function call<T>(path: string, init?: RequestInit, timeoutMs = 8000): Prom
   const ctl = new AbortController();
   const timer = window.setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const r = await fetch(base + path, { cache: 'no-store', ...init, signal: ctl.signal });
+    const r = await fetch(base + path, {
+      cache: 'no-store',
+      ...init,
+      headers: { ...authHeaders(base), ...(init?.headers as Record<string, string> | undefined) },
+      signal: ctl.signal,
+    });
     let data: T | null = null;
     if ((r.headers.get('content-type') ?? '').includes('json')) {
       try {
@@ -44,8 +50,6 @@ export const getJson = <T,>(path: string) => call<T>(path);
 
 export async function postJson<T>(path: string, body: unknown): Promise<Answer<T>> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  const token = useStore.getState().prefs.token.trim();
-  if (token) headers['x-rhcs-token'] = token;
   const a = await call<T>(path, { method: 'POST', headers, body: JSON.stringify(body ?? {}) });
   if (a.status === 401) {
     toast(

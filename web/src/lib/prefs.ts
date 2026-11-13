@@ -29,7 +29,10 @@ export interface Prefs {
   hubs: string[];
   /** The backend that answered last time; tried first next time. */
   lastGood: string;
+  /** Fallback access token, used for any backend without its own. */
   token: string;
+  /** Access token per backend URL (x-rhcs-token). */
+  tokens: Record<string, string>;
   demo: boolean;
   sound: boolean;
   accentHue: number;
@@ -40,6 +43,7 @@ export const defaultPrefs: Prefs = {
   hubs: [],
   lastGood: '',
   token: '',
+  tokens: {},
   demo: false,
   sound: false,
   accentHue: 168,
@@ -54,6 +58,11 @@ export function loadPrefs(): Prefs {
     })(),
     lastGood: load('lastGood', defaultPrefs.lastGood),
     token: load('token', defaultPrefs.token),
+    tokens: (() => {
+      const v = load<unknown>('tokens', {});
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+      return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, t]) => typeof t === 'string')) as Record<string, string>;
+    })(),
     demo: load('demo', defaultPrefs.demo),
     sound: load('sound', defaultPrefs.sound),
     accentHue: load('accentHue', defaultPrefs.accentHue),
