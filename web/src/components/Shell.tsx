@@ -224,6 +224,15 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
     }
   }, [conn]);
 
+  // Escape closes the card (it shrinks to the small bar at the top).
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setHidden(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const down = conn !== 'live' && (unreachable || (downSince !== null && now - downSince > 4000));
   if (!down) return null;
 
@@ -275,8 +284,18 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
     };
     const [title, body] = text[authIssue];
     return (
-      <div className="unreach" role="alertdialog" aria-labelledby="unreach-title">
+      <div
+        className="unreach"
+        role="alertdialog"
+        aria-labelledby="unreach-title"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setHidden(true);
+        }}
+      >
         <div className="unreach__card panel">
+          <button type="button" className="unreach__x" aria-label="Close" onClick={() => setHidden(true)}>
+            ✕
+          </button>
           <div className="panel__kicker">Home system</div>
           <h2 id="unreach-title" className="unreach__title">
             {title}
@@ -350,8 +369,18 @@ export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
   }
 
   return (
-    <div className="unreach" role="alertdialog" aria-labelledby="unreach-title">
+    <div
+      className="unreach"
+      role="alertdialog"
+      aria-labelledby="unreach-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setHidden(true);
+      }}
+    >
       <div className="unreach__card panel">
+        <button type="button" className="unreach__x" aria-label="Close" onClick={() => setHidden(true)}>
+          ✕
+        </button>
         <div className="panel__kicker">Home system</div>
         <h2 id="unreach-title" className="unreach__title">
           Connection interrupted
