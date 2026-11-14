@@ -103,17 +103,17 @@ end;
 { 48 hex characters from the operating system's random generator. }
 function MakeToken: String;
 var
-  Tmp, Ps: String;
+  Tmp, TmpPs, Ps: String;
   Code: Integer;
   Lines: TArrayOfString;
 begin
   Result := '';
   Tmp := ExpandConstant('{tmp}\tok.txt');
+  TmpPs := Tmp;
+  StringChangeEx(TmpPs, '''', '''''', True); { escape ' for a PowerShell single-quoted string }
   Ps := '$b = New-Object byte[] 24; ' +
         '$g = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $g.GetBytes($b); ' +
-        '(($b | ForEach-Object { $_.ToString(''x2'') }) -join '''') | Set-Content -NoNewline -Encoding ASCII -LiteralPath $env:TOKFILE';
-  { The output path travels in an environment variable, so no quoting problems. }
-  SetEnvironmentVariable('TOKFILE', Tmp);
+        '(($b | ForEach-Object { $_.ToString(''x2'') }) -join '''') | Set-Content -NoNewline -Encoding ASCII -LiteralPath ''' + TmpPs + '''';
   if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
           '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Ps + '"',
           '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
