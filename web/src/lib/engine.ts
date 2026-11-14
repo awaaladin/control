@@ -9,7 +9,7 @@ import { useStore } from './store';
 /** Fixed download link, served by the "Build Windows installer" GitHub Actions workflow. */
 export const WINDOWS_INSTALLER_URL = 'https://github.com/awaaladin/control/releases/download/windows-latest/PULSE-Setup.exe';
 /** Approximate size shown before downloading (the real file differs a little per build). */
-export const WINDOWS_INSTALLER_SIZE = 'about 10 MB';
+export const WINDOWS_INSTALLER_SIZE = 'about 3 MB';
 /** The link the installer registers; it starts the engine and nothing else. */
 export const START_LINK = 'pulse://start';
 
