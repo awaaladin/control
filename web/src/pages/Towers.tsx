@@ -11,6 +11,7 @@ import {
   usePlacesPolling,
   useTowers,
   useTowersPolling,
+  type AroundCell,
   type Place,
   type SourceStats,
   type TowerCell,
@@ -128,7 +129,11 @@ function PlacesList({ spots }: { spots: MarkedSpot[] }) {
  * signal (automatic places, Aim-mode spots, right now) and where the tower is.
  */
 function WhereBest({ v }: { v: TowersView }) {
-  const t = useStore((s) => s.telemetry);
+  const routerOn = useStore((s) => s.sources?.router_configured !== false);
+  const ph = useStore((s) => s.phone);
+  const tel = useStore((s) => s.telemetry);
+  // With no router (the app) "right now" is the phone's own reading.
+  const t = routerOn ? tel : ph;
   const allSpots = load<MarkedSpot[]>('spots', []);
   const spots = allSpots.filter((s) => isNum(s.sinr)).sort((a, b) => (b.sinr ?? -99) - (a.sinr ?? -99));
   const best = spots[0];
@@ -194,7 +199,7 @@ function WhereBest({ v }: { v: TowersView }) {
               ) : null}
             </>
           ) : (
-            <span className="muted">no router reading</span>
+            <span className="muted">{routerOn ? 'no router reading' : 'no phone reading'}</span>
           )}
           {here ? (
             <span className="muted">
@@ -231,8 +236,17 @@ function WhereBest({ v }: { v: TowersView }) {
               <p>
                 {located ? (
                   <>
-                    Tip: put the router on the <strong>{dir}</strong> side of the house, high up and near a window facing
-                    that way. Walls and metal between it and the tower cost the most signal.
+                    {routerOn ? (
+                      <>
+                        Tip: put the router on the <strong>{dir}</strong> side of the house, high up and near a window facing
+                        that way. Walls and metal between it and the tower cost the most signal.
+                      </>
+                    ) : (
+                      <>
+                        Tip: the signal is usually best on the <strong>{dir}</strong> side of the building, high up and near a
+                        window facing that way. Walls and metal between you and the tower cost the most signal.
+                      </>
+                    )}
                   </>
                 ) : (
                   <span className="muted">{why} Until then, your places and marked spots on the left are the best guide.</span>
@@ -246,6 +260,100 @@ function WhereBest({ v }: { v: TowersView }) {
       </Panel>
     </section>
   );
+}
+
+/** 0-5 bars from RSRP (dBm). */
+function rsrpBars(r: number | null | undefined): number {
+  if (!isNum(r)) return 0;
+  return r >= -80 ? 5 : r >= -90 ? 4 : r >= -100 ? 3 : r >= -110 ? 2 : r >= -120 ? 1 : 0;
+}
+
+function SignalBars({ rsrp }: { rsrp: number | null | undefined }) {
+  const n = rsrpBars(rsrp);
+  return (
+    <span className="bars" role="img" aria-label={isNum(rsrp) ? `${n} of 5 bars` : 'no signal reading'}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span key={i} className={`bars__b ${i <= n ? 'is-on' : ''}`} style={{ height: `${30 + i * 14}%` }} />
+      ))}
+    </span>
+  );
+}
+
+function aroundName(c: AroundCell): string {
+  if (isNum(c.enb) && isNum(c.sector)) return cellName(c.enb, c.sector);
+  return isNum(c.pci) ? `PCI ${c.pci}` : 'cell';
+}
+
+/** What the phone hears right now: its own cell and the others around it, strongest first. */
+function AroundPanel({ v }: { v: TowersView }) {
+  const around = v.around;
+  const rec = v.recommendation;
+  if (!around) return null;
+  return (
+    <Panel kicker="Heard by this phone, live" title="Cells around you" className="around">
+      {rec ? (
+        <p className={`small ${rec.status === 'better' ? 'g-good' : 'muted'}`} role="status">
+          {rec.message}
+        </p>
+      ) : null}
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th scope="col">Cell</th>
+              <th scope="col">Signal</th>
+              <th scope="col">RSRP</th>
+              <th scope="col">SINR</th>
+              <th scope="col">Band</th>
+              <th scope="col">Where the tower is</th>
+            </tr>
+          </thead>
+          <tbody>
+            {around.cells.map((c, i) => (
+              <tr key={`${c.key ?? 'x'}-${c.pci ?? i}-${i}`} className={c.serving ? 'is-best' : ''}>
+                <th scope="row" className="num">
+                  {aroundName(c)} {c.serving ? <Badge tone="live">you are here</Badge> : null}
+                  {c.rat && c.rat !== 'LTE' ? <span className="muted small"> {c.rat}</span> : null}
+                  {isNum(c.pci) && isNum(c.enb) ? <span className="muted small"> · PCI {c.pci}</span> : null}
+                </th>
+                <td>
+                  <SignalBars rsrp={c.rsrp} />
+                </td>
+                <td className={`num g-${grade('rsrp', c.rsrp)}`}>{isNum(c.rsrp) ? `${fmt(c.rsrp)} dBm` : '—'}</td>
+                <td className={`num g-${grade('sinr', c.sinr)}`}>{isNum(c.sinr) ? `${fmt(c.sinr, 1)} dB` : '—'}</td>
+                <td className="num">
+                  {isNum(c.band) ? bandLabel(c.band) : '—'}
+                  {!isNum(c.band) && isNum(c.earfcn) ? `EARFCN ${c.earfcn}` : ''}
+                </td>
+                <td>
+                  {isNum(c.distance_m) ? (
+                    <span className="num">
+                      {distanceWords(c.distance_m)} {COMPASS_WORDS[c.compass ?? ''] ?? c.compass}
+                    </span>
+                  ) : c.lookup ? (
+                    <Badge tone={lookupTone(c.lookup.status)}>{lookupWord(c.lookup.status)}</Badge>
+                  ) : (
+                    <span className="muted small">identity hidden by the phone</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">
+        Updated {around.age_s < 5 ? 'just now' : `${around.age_s} s ago`}. Your phone chooses its cell by itself; PULSE can show you
+        the stronger ones but cannot move the phone onto them.
+      </p>
+    </Panel>
+  );
+}
+
+function lookupWord(s: string): string {
+  return s === 'found' ? 'located' : s === 'pending' ? 'looking up…' : s === 'not_found' ? 'position unknown' : s === 'error' ? 'lookup failed' : s === 'incomplete' ? 'IDs incomplete' : 'lookups off';
+}
+function lookupTone(s: string): string {
+  return s === 'found' ? 'good' : s === 'not_found' || s === 'incomplete' ? 'fair' : s === 'error' ? 'poor' : 'neutral';
 }
 
 function Sig({ st }: { st: SourceStats | null }) {
@@ -299,7 +407,7 @@ function sourcesText(v: TowersView): string {
   return names.join(' and ') || 'no database';
 }
 
-function CellTable({ cells, now }: { cells: TowerCell[]; now: number }) {
+function CellTable({ cells, now, routerOn }: { cells: TowerCell[]; now: number; routerOn: boolean }) {
   const sorted = [...cells].sort((a, b) => b.last_seen - a.last_seen);
   return (
     <div className="table-wrap">
@@ -309,7 +417,7 @@ function CellTable({ cells, now }: { cells: TowerCell[]; now: number }) {
             <th scope="col">Cell</th>
             <th scope="col">PCI</th>
             <th scope="col">Band</th>
-            <th scope="col">Router: time · SINR avg / best · RSRP</th>
+            {routerOn ? <th scope="col">Router: time · SINR avg / best · RSRP</th> : null}
             <th scope="col">Phone: time · SINR avg / best · RSRP</th>
             <th scope="col">Where</th>
             <th scope="col">Last seen</th>
@@ -330,13 +438,22 @@ function CellTable({ cells, now }: { cells: TowerCell[]; now: number }) {
                 </th>
                 <td className="num">{fmt(c.pci)}</td>
                 <td className="num">{c.bands.length ? c.bands.map((b) => bandLabel(b)).join(', ') : '—'}</td>
-                <td>
-                  {c.router ? <span className="num">{fmtDuration(c.router.secs)} · </span> : null}
-                  <Sig st={c.router} />
-                </td>
+                {routerOn ? (
+                  <td>
+                    {c.router ? <span className="num">{fmtDuration(c.router.secs)} · </span> : null}
+                    <Sig st={c.router} />
+                  </td>
+                ) : null}
                 <td>
                   {c.phone ? <span className="num">{fmtDuration(c.phone.secs)} · </span> : null}
                   <Sig st={c.phone} />
+                  {!c.phone && c.nearby ? (
+                    <span className="muted small num">
+                      {' '}
+                      heard, not served: {isNum(c.nearby.rsrp) ? `${fmt(c.nearby.rsrp)} dBm` : '—'}
+                      {isNum(c.nearby.sinr) ? ` · ${fmt(c.nearby.sinr, 1)} dB` : ''}
+                    </span>
+                  ) : null}
                 </td>
                 <td>
                   {isNum(c.distance_m) ? (
@@ -420,12 +537,13 @@ export function TowersPage() {
   useTowersPolling();
   const { view: v, unsupported, at } = useTowers();
   const conn = useStore((s) => s.conn);
+  const routerOn = useStore((s) => s.sources?.router_configured !== false);
   const now = useNow(5000);
 
   const head = (
     <header className="pagehead">
       <div>
-        <div className="pagehead__kicker">Router and phone cells</div>
+        <div className="pagehead__kicker">{routerOn ? 'Router and phone cells' : 'Cells around this phone'}</div>
         <h1 className="pagehead__title">Towers</h1>
       </div>
       <div className="pagehead__actions">{v ? <Badge>{`${v.cells.length} cell${v.cells.length === 1 ? '' : 's'} seen`}</Badge> : null}</div>
@@ -459,6 +577,7 @@ export function TowersPage() {
   return (
     <div className="page page--towers">
       {head}
+      <AroundPanel v={v} />
       <WhereBest v={v} />
       {v.lookup && !v.lookup.enabled ? <LookupOff /> : <MapPanel v={v} />}
 
@@ -471,9 +590,9 @@ export function TowersPage() {
 
       <Panel kicker="Everything seen since rhcsd started keeping records" title="Cells">
         {v.cells.length ? (
-          <CellTable cells={v.cells} now={now} />
+          <CellTable cells={v.cells} now={now} routerOn={routerOn} />
         ) : (
-          <Empty title="No cells recorded yet">They appear as soon as the router or phone reports its serving cell.</Empty>
+          <Empty title="No cells recorded yet">They appear as soon as {routerOn ? 'the router or phone reports' : 'the phone reports'} its serving cell.</Empty>
         )}
         <p className="muted small">
           A tower (eNB) usually has three sectors facing different directions; each sector is its own cell. SINR shown as average / best.

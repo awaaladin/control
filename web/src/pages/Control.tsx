@@ -146,6 +146,7 @@ export function ControlPage() {
   };
 
   const r = sources?.router;
+  const routerOn = sources?.router_configured !== false;
   const p = sources?.phone;
   const sc = sources?.scan;
 
@@ -161,6 +162,7 @@ export function ControlPage() {
       </header>
 
       <div className="control-grid">
+        {routerOn ? (
         <Panel title="Router" kicker={`${str(r?.model)} · ${str(r?.host)}`} className="ctl-router">
           <div className="actions">
             <div className="action">
@@ -212,11 +214,12 @@ export function ControlPage() {
             </div>
           </div>
         </Panel>
+        ) : null}
 
         <Panel title="Polling" kicker="rhcsd settings" className="ctl-poll">
           <label className="field field--wide">
             <span className="field__label">
-              Router refresh interval <span className="num accent">{interval.toFixed(1)} s</span>
+              {routerOn ? 'Router refresh interval' : 'Refresh interval'} <span className="num accent">{interval.toFixed(1)} s</span>
             </span>
             <input type="range" min={0.5} max={10} step={0.5} value={interval} onChange={(e) => setIntervalV(Number(e.target.value))} aria-valuetext={`${interval} seconds`} />
           </label>
@@ -241,7 +244,9 @@ export function ControlPage() {
 
         <Panel title="Source health" kicker="from rhcsd status" className="ctl-health">
           <div className="sources">
-            <SourceCard name="Router" kind="router" online={r?.online} lastOk={r?.last_ok} error={r?.error} extra={<KV k="Logged in" v={r?.logged_in ? 'yes' : r?.logged_in === false ? 'no' : '—'} />} />
+            {routerOn ? (
+              <SourceCard name="Router" kind="router" online={r?.online} lastOk={r?.last_ok} error={r?.error} extra={<KV k="Logged in" v={r?.logged_in ? 'yes' : r?.logged_in === false ? 'no' : '—'} />} />
+            ) : null}
             <SourceCard name="Phone" kind="phone" online={p?.online} lastOk={p?.last_ok} error={p?.error} />
             <SourceCard
               name="Scanner"

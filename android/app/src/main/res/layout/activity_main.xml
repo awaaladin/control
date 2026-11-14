@@ -55,6 +55,24 @@
             android:textColor="@color/muted"
             android:textSize="14sp" />
 
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/engineSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Built-in engine on this phone"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/engineStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:fontFamily="monospace"
+            android:textColor="@color/muted"
+            android:textSize="11sp" />
+
         <ProgressBar
             android:id="@+id/progress"
             style="?android:attr/progressBarStyleHorizontal"
@@ -152,5 +170,80 @@
             android:textAllCaps="false"
             android:textColor="@color/accent"
             android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="OpenCellID key (optional, for finding more tower positions)"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/ocid"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/input_bg"
+            android:hint="Only stored on this phone"
+            android:importantForAutofill="no"
+            android:inputType="textPassword"
+            android:padding="12dp"
+            android:singleLine="true"
+            android:textColor="@color/text"
+            android:textColorHint="#55657A"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <!-- First start: what the app asks for, and why. -->
+    <LinearLayout
+        android:id="@+id/intro"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/panel"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="PULSE works on this phone"
+            android:textColor="@color/text"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/introText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:lineSpacingExtra="3dp"
+            android:textColor="@color/muted"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/introContinue"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="20dp"
+            android:background="@drawable/button_bg"
+            android:text="Continue"
+            android:textAllCaps="false"
+            android:textColor="#05080C"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/introOther"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/button_alt_bg"
+            android:text="Open another PULSE system instead"
+            android:textAllCaps="false"
+            android:textColor="@color/text" />
     </LinearLayout>
 </FrameLayout>

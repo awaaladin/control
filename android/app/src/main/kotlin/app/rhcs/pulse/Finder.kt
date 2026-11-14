@@ -133,8 +133,11 @@ object Finder {
     ) {
         val nets = withContext(Dispatchers.IO) { localNetworks() }
 
-        // The phone's own hub (rhcsd running in Termux).
-        withContext(Dispatchers.IO) { health("http://127.0.0.1:$PORT", 800) }?.let { onHub("127.0.0.1", it, true) }
+        // The phone's own hub (rhcsd running in Termux). With the built-in engine this phone
+        // already has its own first row, so a loopback hit would only be a duplicate of it.
+        if (!Engine.supported()) {
+            withContext(Dispatchers.IO) { health("http://127.0.0.1:$PORT", 800) }?.let { onHub("127.0.0.1", it, true) }
+        }
 
         if (nets.isEmpty()) {
             onStatus("No Wi-Fi, hotspot or USB network found. Turn one on, then Scan again.")

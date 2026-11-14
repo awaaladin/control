@@ -13,8 +13,15 @@ android {
         // 34 on purpose: newer targets force edge-to-edge layouts and local-network permission prompts
         // that this simple app does not need yet.
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        // The built-in engine (rhcsd) is an aarch64 binary shipped as librhcsd.so.
+        ndk { abiFilters += "arm64-v8a" }
+    }
+
+    packaging {
+        // The engine is executed from the app's native library folder, so it must be extracted to disk.
+        jniLibs { useLegacyPackaging = true }
     }
 
     buildTypes {

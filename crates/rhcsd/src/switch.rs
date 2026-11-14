@@ -83,8 +83,8 @@ pub struct Switcher {
 }
 
 impl Switcher {
-    pub fn new() -> Self {
-        let path = rhcs_core::env::project_dir().join("data").join("switch.json");
+    pub fn open(dir: &std::path::Path) -> Self {
+        let path = dir.join("switch.json");
         let book = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         Self { book: Mutex::new(book), path }
     }

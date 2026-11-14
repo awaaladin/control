@@ -156,6 +156,9 @@ export function confirmAction(opts: Omit<ConfirmRequest, 'resolve'>): Promise<bo
   });
 }
 
+/** False only when the backend says it has no router (the Android app); older backends say nothing = true. */
+export const useRouterConfigured = (): boolean => useStore((s) => s.sources?.router_configured !== false);
+
 /** Staleness thresholds (ms) per source. */
 export const STALE_MS = { telemetry: 5000, phone: 15000 };
 

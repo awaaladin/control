@@ -8,7 +8,7 @@
 use crate::state::{now_ms, Config, Shared};
 use anyhow::{anyhow, bail, Context, Result};
 use rhcs_core::MacAddr;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -29,6 +29,26 @@ pub struct HotspotClient {
     pub state: String,
     pub vendor: Option<String>,
     pub label: Option<String>,
+}
+
+/// A cell the phone can hear but is not served by (reported by the Android app).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Neighbor {
+    /// Cell key (see towers::cell_key). Always computed by rhcsd, never taken from the sender.
+    pub key: Option<String>,
+    /// Cell identity (LTE: eNB * 256 + sector). None when the phone does not reveal it.
+    pub ci: Option<u32>,
+    pub pci: Option<u32>,
+    pub tac: Option<u32>,
+    pub earfcn: Option<u32>,
+    pub band: Option<u16>,
+    pub mcc: Option<String>,
+    pub mnc: Option<String>,
+    pub rsrp: Option<f32>,
+    pub rsrq: Option<f32>,
+    pub sinr: Option<f32>,
+    /// "LTE", "NR", "WCDMA", "GSM"
+    pub rat: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -53,6 +73,13 @@ pub struct PhoneStatus {
     pub mcc: Option<String>,
     pub mnc: Option<String>,
     pub hotspot_clients: Vec<HotspotClient>,
+    /// Pushed by the Android app only: the carrier name, "LTE"/"NR"/..., the SIM slot (0-based),
+    /// the serving radio technology and the other cells the phone can hear.
+    pub operator: Option<String>,
+    pub network_type: Option<String>,
+    pub sim_slot: Option<u8>,
+    pub rat: Option<String>,
+    pub neighbors: Vec<Neighbor>,
 }
 
 pub(crate) async fn adb(cfg: &Config, target: Option<&str>, args: &[&str]) -> Result<String> {

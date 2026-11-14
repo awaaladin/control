@@ -104,6 +104,7 @@ export function TopBar() {
           : { label: 'RECONNECTING', tone: 'wait' };
 
   const router = sources?.router;
+  const routerOn = sources?.router_configured !== false;
   return (
     <header className="topbar">
       <div className={`conn conn--${state.tone}`} role="status" aria-live="polite">
@@ -113,11 +114,13 @@ export function TopBar() {
       <div className="topbar__url num" title="Backend URL">
         {baseUrl ? baseUrl.replace(/^https?:\/\//, '') : '…'}
       </div>
-      <div className="topbar__router" title="Router">
-        <span className={`dot ${router?.online ? 'dot--ok' : 'dot--off'}`} aria-hidden="true" />
-        <span className="topbar__model">{router?.model || 'router'}</span>
-        <span className="topbar__host num">{router?.host || '—'}</span>
-      </div>
+      {routerOn ? (
+        <div className="topbar__router" title="Router">
+          <span className={`dot ${router?.online ? 'dot--ok' : 'dot--off'}`} aria-hidden="true" />
+          <span className="topbar__model">{router?.model || 'router'}</span>
+          <span className="topbar__host num">{router?.host || '—'}</span>
+        </div>
+      ) : null}
       <AppDownload variant="pill" />
       <div className="topbar__clock num" aria-label="Local time">
         {fmtTime(now)}

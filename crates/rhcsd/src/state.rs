@@ -46,12 +46,33 @@ pub struct Config {
     pub router_ssids: Vec<String>,
     /// Wi-Fi name(s) of the phone's hotspot (PHONE_HOTSPOT_SSID, comma separated).
     pub phone_hotspot_ssids: Vec<String>,
+    /// RHCSD_APP=1: rhcsd runs inside the Android app. The app pushes the phone's own
+    /// cell/location data, there is no ADB/Termux/router, and every /api and /ws call
+    /// needs the token, even from loopback (other apps on the phone can reach it).
+    pub app_mode: bool,
+    /// A router address was given (always true outside app mode, where it defaults).
+    pub router_configured: bool,
+    /// Where towers.json, places.json and switch.json live (RHCSD_DATA_DIR).
+    pub data_dir: PathBuf,
+    /// How tower positions are looked up (TOWER_LOOKUP): on = curl, external = the app, off.
+    pub tower_lookup: crate::towers::LookupMode,
+    /// OpenCellID API key (OPENCELLID_KEY), only used by the curl lookups.
+    pub opencellid_key: Option<String>,
+    /// HOME_LAT / HOME_LON
+    pub home: Option<(f64, f64)>,
+    /// Extra browser origins allowed to call the API (RHCSD_ALLOWED_ORIGINS, comma separated).
+    pub allowed_origins: Vec<String>,
 }
 
 impl Config {
     pub fn from_env() -> Self {
-        let e = rhcs_core::env::load();
-        let get = |k: &str| e.get(k).cloned().filter(|v| !v.is_empty());
+        Self::from_map(&rhcs_core::env::load())
+    }
+
+    /// Pure form of [`Config::from_env`] (tests and the app pass their own map).
+    pub fn from_map(e: &HashMap<String, String>) -> Self {
+        let get = |k: &str| e.get(k).cloned().filter(|v| !v.trim().is_empty());
+        let app_mode = rhcs_core::env::truthy(get("RHCSD_APP").as_deref());
 
         let adb_path = get("ADB_PATH").unwrap_or_else(|| {
             let sdk = std::env::var("LOCALAPPDATA")
@@ -62,7 +83,7 @@ impl Config {
         });
 
         let mut known_macs = HashMap::new();
-        for (k, v) in &e {
+        for (k, v) in e.iter() {
             if let (Some(prefix), Some(mac)) = (k.strip_suffix("_MAC"), MacAddr::parse(v)) {
                 let label = prefix
                     .trim_start_matches("HOTSPOT_KNOWN_")
@@ -74,10 +95,12 @@ impl Config {
         }
 
         Self {
-            bind: get("RHCSD_BIND").unwrap_or_else(|| "0.0.0.0:7878".into()),
+            bind: get("RHCSD_BIND").unwrap_or_else(|| if app_mode { "127.0.0.1:7878" } else { "0.0.0.0:7878" }.into()),
             token: get("RHCSD_TOKEN"),
             lock_reads: get("RHCSD_LOCK_READS").is_some_and(|v| matches!(v.to_lowercase().as_str(), "on" | "1" | "true" | "yes")),
-            router_ip: get("ROUTER_IP").unwrap_or_else(|| "192.168.0.1".into()),
+            // App mode has no default router: unset or empty means "no router".
+            router_ip: get("ROUTER_IP").map(|v| v.trim().to_string()).unwrap_or_else(|| if app_mode { String::new() } else { "192.168.0.1".into() }),
+            router_configured: !app_mode || get("ROUTER_IP").is_some(),
             router_password: get("ROUTER_ADMIN_PASSWORD"),
             router_model: get("ROUTER_MODEL").unwrap_or_else(|| "ZTE router".into()),
             phone_serial: get("PHONE_ADB_SERIAL"),
@@ -88,7 +111,17 @@ impl Config {
                 .unwrap_or_default(),
             scan_interval_s: get("SCAN_INTERVAL_S").and_then(|s| s.parse().ok()).unwrap_or(300),
             known_macs,
-            web_dir: rhcs_core::env::project_dir().join("web").join("dist"),
+            web_dir: get("RHCSD_WEB_DIR")
+                .map(|d| PathBuf::from(d.trim()))
+                .unwrap_or_else(|| rhcs_core::env::project_dir().join("web").join("dist")),
+            app_mode,
+            data_dir: rhcs_core::env::data_dir_from(e),
+            tower_lookup: crate::towers::lookup_mode(get("TOWER_LOOKUP").as_deref(), app_mode),
+            allowed_origins: get("RHCSD_ALLOWED_ORIGINS")
+                .map(|s| s.split(',').map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()).collect())
+                .unwrap_or_default(),
+            opencellid_key: get("OPENCELLID_KEY").map(|k| k.trim().to_string()),
+            home: crate::towers::parse_home(e.get("HOME_LAT").map(String::as_str), e.get("HOME_LON").map(String::as_str)),
             router_ssids: ["ROUTER_WIFI_SSID", "ROUTER2_WIFI_SSID"].iter().filter_map(|k| get(k)).collect(),
             phone_hotspot_ssids: get("PHONE_HOTSPOT_SSID")
                 .map(|s| s.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect())
@@ -166,6 +199,8 @@ pub struct ScanState {
 
 #[derive(Clone, Default, Serialize)]
 pub struct Sources {
+    /// False when no router address is set (the app): PULSE then hides router-only UI and errors.
+    pub router_configured: bool,
     pub router: RouterState,
     pub phone: SourceState,
     pub scan: ScanState,
@@ -189,6 +224,8 @@ pub struct AppState {
     pub tx: broadcast::Sender<String>,
     pub inner: RwLock<Inner>,
     pub scan_now: Notify,
+    /// Asked to end the process cleanly (POST /api/engine/stop).
+    pub shutdown: Notify,
     pub relogin: AtomicBool,
     pub oui: OuiDb,
     /// Game Boost measurements (see boost.rs).
@@ -211,9 +248,13 @@ impl AppState {
     pub fn new(cfg: Config) -> Shared {
         let (tx, _) = broadcast::channel(512);
         let sources = Sources {
+            router_configured: cfg.router_configured,
             router: RouterState { host: cfg.router_ip.clone(), model: cfg.router_model.clone(), ..Default::default() },
             ..Default::default()
         };
+        let towers = crate::towers::Towers::open(&cfg);
+        let places = crate::places::Places::open(&cfg.data_dir);
+        let switch = crate::switch::Switcher::open(&cfg.data_dir);
         Arc::new(Self {
             cfg,
             started: Instant::now(),
@@ -228,13 +269,14 @@ impl AppState {
                 interval_s: 1.0,
             }),
             scan_now: Notify::new(),
+            shutdown: Notify::new(),
             relogin: AtomicBool::new(false),
             oui: OuiDb::load(),
             boost: crate::boost::Boost::new(),
-            towers: crate::towers::Towers::new(),
+            towers,
             location: RwLock::new(None),
-            places: crate::places::Places::new(),
-            switch: crate::switch::Switcher::new(),
+            places,
+            switch,
             admin: crate::switch::is_elevated(),
             learned_hotspot_ssids: RwLock::new(Vec::new()),
         })

@@ -23,6 +23,25 @@ pub fn project_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Folder for the files rhcsd keeps (towers.json, places.json, switch.json):
+/// `RHCSD_DATA_DIR` if set (the Android app points it at its private storage),
+/// else `data/` in the project folder.
+pub fn data_dir() -> PathBuf {
+    data_dir_from(&load())
+}
+
+pub fn data_dir_from(env: &HashMap<String, String>) -> PathBuf {
+    match env.get("RHCSD_DATA_DIR").map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        Some(d) => PathBuf::from(d),
+        None => project_dir().join("data"),
+    }
+}
+
+/// True for `1`, `on`, `true`, `yes` (any case).
+pub fn truthy(v: Option<&str>) -> bool {
+    matches!(v.map(|v| v.trim().to_ascii_lowercase()).as_deref(), Some("1" | "on" | "true" | "yes"))
+}
+
 pub fn load() -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Some(text) = find().and_then(|p| std::fs::read_to_string(p).ok()) {
@@ -58,5 +77,21 @@ mod tests {
         assert!(super::is_rhcs_key("TOWER_LOOKUP"));
         assert!(super::is_rhcs_key("PHONE_HOTSPOT_SSID"));
         assert!(!super::is_rhcs_key("PATH"));
+        // the Android app sets these through the environment only
+        for k in ["RHCSD_APP", "RHCSD_WEB_DIR", "RHCSD_DATA_DIR", "RHCSD_TOKEN", "RHCSD_BIND", "ROUTER_IP", "TOWER_LOOKUP"] {
+            assert!(super::is_rhcs_key(k), "{k}");
+        }
+    }
+
+    #[test]
+    fn data_dir_override_and_truthy() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("RHCSD_DATA_DIR".to_string(), " /data/user/0/app/files/data ".to_string());
+        assert_eq!(super::data_dir_from(&m), std::path::PathBuf::from("/data/user/0/app/files/data"));
+        m.insert("RHCSD_DATA_DIR".to_string(), "  ".to_string());
+        assert!(super::data_dir_from(&m).ends_with("data"));
+        assert!(super::data_dir_from(&std::collections::HashMap::new()).ends_with("data"));
+        assert!(super::truthy(Some("1")) && super::truthy(Some(" On ")) && super::truthy(Some("TRUE")));
+        assert!(!super::truthy(Some("0")) && !super::truthy(Some("")) && !super::truthy(None));
     }
 }

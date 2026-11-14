@@ -38,6 +38,8 @@ export interface TowerCell {
   first_seen: number;
   last_seen: number;
   seen_by: ('router' | 'phone')[];
+  /** Last signal the phone measured here without being served by it. */
+  nearby?: { ts: number; rsrp: number | null; rsrq: number | null; sinr: number | null } | null;
   serving: ('router' | 'phone')[];
   router: SourceStats | null;
   phone: SourceStats | null;
@@ -46,6 +48,42 @@ export interface TowerCell {
   distance_m: number | null;
   bearing_deg: number | null;
   compass: string | null;
+}
+
+/** One line of "Cells around you": the serving cell first, then what else the phone hears. */
+export interface AroundCell {
+  serving: boolean;
+  key: string | null;
+  ci: number | null;
+  enb: number | null;
+  sector: number | null;
+  pci: number | null;
+  tac: number | null;
+  earfcn: number | null;
+  band: number | null;
+  mhz: string | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  sinr: number | null;
+  rat: string | null;
+  location: CellLocation | null;
+  lookup: TowerCell['lookup'] | null;
+  distance_m: number | null;
+  bearing_deg: number | null;
+  compass: string | null;
+}
+
+export interface Recommendation {
+  status: 'better' | 'best' | 'unknown' | 'stale';
+  message: string;
+  key?: string | null;
+  enb?: number | null;
+  sector?: number | null;
+  band?: number | null;
+  delta_db?: number;
+  distance_m?: number | null;
+  compass?: string | null;
+  can_force?: boolean;
 }
 
 export interface HandoverEnd {
@@ -74,7 +112,7 @@ export interface HomeLocation {
 export interface TowersView {
   /** An OpenCellID key is set (beaconDB needs none). */
   key_configured: boolean;
-  lookup?: { enabled: boolean; sources: string[] };
+  lookup?: { enabled: boolean; sources: string[]; external?: boolean };
   message: string | null;
   /** Where distances are measured from: the manual home, else the phone's position. */
   home: HomeLocation | null;
@@ -86,6 +124,9 @@ export interface TowersView {
   cells: TowerCell[];
   handovers: TowerHandover[];
   best: { key: string; avg_sinr: number; message: string } | null;
+  /** Cells the phone hears right now (app only); null when none reported. */
+  around?: { ts: number; age_s: number; cells: AroundCell[] } | null;
+  recommendation?: Recommendation | null;
 }
 
 interface TowersStore {

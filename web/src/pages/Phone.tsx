@@ -26,6 +26,8 @@ export function PhonePage() {
   const p = useStore((s) => s.phone);
   const t = useStore((s) => s.telemetry);
   const src = useStore((s) => s.sources?.phone);
+  const routerOn = useStore((s) => s.sources?.router_configured !== false);
+  const inApp = useStore((s) => s.health?.app_mode === true);
   const phoneAt = useStore((s) => s.phoneAt);
   const now = useNow(2000);
   const stale = isStale(phoneAt, STALE_MS.phone, now);
@@ -35,13 +37,19 @@ export function PhonePage() {
       <div className="page">
         <header className="pagehead">
           <div>
-            <div className="pagehead__kicker">Android over ADB</div>
+            <div className="pagehead__kicker">{inApp ? 'This phone' : 'Android over ADB'}</div>
             <h1 className="pagehead__title">Phone</h1>
           </div>
         </header>
         <Panel>
           <Empty title="No phone connected">
-            {src?.error ? <ErrorExplain e={explainError('phone', src.error)} /> : 'rhcsd has not reported a phone yet. Connect it over USB with debugging enabled, or pair ADB over Wi-Fi.'}
+            {src?.error ? (
+              <ErrorExplain e={explainError('phone', src.error)} />
+            ) : inApp ? (
+              'The app has not sent this phone\'s readings yet. Allow Location and Phone access for PULSE, and turn Location on.'
+            ) : (
+              'rhcsd has not reported a phone yet. Connect it over USB with debugging enabled, or pair ADB over Wi-Fi.'
+            )}
             {src?.last_ok ? <div className="muted small">Last seen {fmtAgo(src.last_ok, now)}</div> : null}
           </Empty>
         </Panel>
@@ -64,7 +72,13 @@ export function PhonePage() {
           <h1 className="pagehead__title">{p.model || 'Phone'}</h1>
         </div>
         <div className="pagehead__actions">
-          {p.transport ? <Badge tone={p.transport === 'usb' ? 'good' : 'accent'}>{p.transport === 'usb' ? 'USB' : 'Wi-Fi'}</Badge> : <Badge>transport —</Badge>}
+          {p.transport ? (
+            <Badge tone={p.transport === 'usb' || p.transport === 'app' ? 'good' : 'accent'}>
+              {p.transport === 'usb' ? 'USB' : p.transport === 'app' ? 'built-in' : p.transport === 'local' ? 'on this phone' : 'Wi-Fi'}
+            </Badge>
+          ) : (
+            <Badge>transport —</Badge>
+          )}
           {stale ? <Badge tone="stale">stale · {fmtAgo(phoneAt, now)}</Badge> : <Badge tone="live" pulse>streaming</Badge>}
         </div>
       </header>
@@ -88,7 +102,7 @@ export function PhonePage() {
               <KV k="Temperature" v={isNum(temp) ? <span className={temp >= 42 ? 'g-poor' : temp >= 38 ? 'g-fair' : ''}>{fmt(temp, 1)} °C</span> : '—'} />
               <KV k="Charging" v={p.charging === null || p.charging === undefined ? '—' : p.charging ? 'yes' : 'no'} />
               <KV k="USB power" v={p.usb_powered === null || p.usb_powered === undefined ? '—' : p.usb_powered ? 'yes' : 'no'} />
-              <KV k="Transport" v={p.transport ? p.transport.toUpperCase() : '—'} />
+              <KV k="Transport" v={p.transport === 'app' ? 'built-in engine' : p.transport ? p.transport.toUpperCase() : '—'} />
             </dl>
           </div>
         </Panel>
@@ -108,9 +122,13 @@ export function PhonePage() {
             <KV k="TAC" v={fmt(p.tac)} />
             <KV k="MCC / MNC" v={p.mcc || p.mnc ? `${str(p.mcc)} / ${str(p.mnc)}` : '—'} />
             <KV k="RSSI" v={isNum(p.rssi) ? `${fmt(p.rssi)} dBm` : '—'} />
+            <KV k="Operator" v={str(p.operator)} mono={false} />
+            <KV k="Network type" v={str(p.network_type)} />
+            <KV k="SIM slot" v={isNum(p.sim_slot) ? `SIM ${p.sim_slot + 1}` : '—'} />
           </dl>
         </Panel>
 
+        {routerOn ? (
         <Panel title="Phone vs router" kicker="Side by side" className="compare">
           <div className="compare__verdict">
             {sameTower === null ? (
@@ -176,6 +194,7 @@ export function PhonePage() {
             </tbody>
           </table>
         </Panel>
+        ) : null}
 
         <Panel title="Hotspot clients" kicker={`${clients.length} connected`} className="clients">
           {clients.length === 0 ? (

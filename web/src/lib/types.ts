@@ -58,6 +58,8 @@ export interface ScanSource {
   networks?: string[];
 }
 export interface Sources {
+  /** False when the backend has no router address (the Android app): hide router-only UI and errors. */
+  router_configured?: boolean;
   router?: RouterSource;
   phone?: PhoneSource;
   scan?: ScanSource;
@@ -71,7 +73,7 @@ export interface PhoneFix {
   lon: number;
   accuracy_m: number | null;
   provider: string;
-  via: 'termux' | 'adb' | string;
+  via: 'termux' | 'adb' | 'app' | string;
   fix_ts: number;
   read_ts: number;
 }
@@ -118,10 +120,31 @@ export interface HotspotClient {
   label?: string | null;
 }
 
+/** A cell the phone hears but is not connected to (pushed by the Android app). */
+export interface PhoneNeighbor {
+  ci?: number | null;
+  pci?: number | null;
+  tac?: number | null;
+  earfcn?: number | null;
+  band?: number | null;
+  mcc?: string | null;
+  mnc?: string | null;
+  rsrp?: number | null;
+  rsrq?: number | null;
+  sinr?: number | null;
+  rat?: string | null;
+}
+
 export interface PhoneStatus {
   model?: string | null;
   android?: string | null;
-  transport?: 'usb' | 'wifi' | 'local' | null;
+  /** 'app' = the built-in engine of the Android app reads the phone itself. */
+  transport?: 'usb' | 'wifi' | 'local' | 'app' | null;
+  operator?: string | null;
+  network_type?: string | null;
+  sim_slot?: number | null;
+  rat?: string | null;
+  neighbors?: PhoneNeighbor[] | null;
   battery_level?: number | null;
   battery_temp_c?: number | null;
   charging?: boolean | null;
@@ -166,6 +189,8 @@ export interface Health {
   uptime_s?: number;
   capabilities?: string[];
   auth_required?: boolean;
+  /** rhcsd runs inside the Android app (RHCSD_APP=1). */
+  app_mode?: boolean;
   /** rhcsd runs as administrator (link switching possible). */
   admin?: boolean;
   switch_supported?: boolean;

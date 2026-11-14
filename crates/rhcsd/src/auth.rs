@@ -7,6 +7,11 @@
 //!            `tailscale serve` connect from localhost and add such headers)
 //! A tunnel makes the whole internet look like loopback, so tunnel requests
 //! always need a token of at least 20 characters. Tokens are never logged.
+//!
+//! App mode (`RHCSD_APP=1`, the Android app): other apps on the phone can reach
+//! loopback, so every class needs the token for everything under /api and /ws.
+//! Wrong tokens from loopback are not rate limited there, because one hostile
+//! app could otherwise lock the real client out; the token is long and random.
 
 use crate::state::Shared;
 use axum::extract::{ConnectInfo, Request, State};
@@ -161,16 +166,17 @@ pub enum Decision {
 /// Gate for every /api and /ws request. Local and lan pass through (the
 /// handlers still check changes with `write_allowed`) unless `lock_reads`
 /// is on for lan; tunnel always needs the token.
-pub fn decide(class: Class, is_health: bool, token: Option<&str>, lock_reads: bool, presented: Option<&str>) -> Decision {
-    let protected = match class {
-        Class::Tunnel => true,
-        Class::Lan => lock_reads,
-        Class::Local => false,
-    };
+pub fn decide(class: Class, is_health: bool, token: Option<&str>, lock_reads: bool, app: bool, presented: Option<&str>) -> Decision {
+    let protected = app
+        || match class {
+            Class::Tunnel => true,
+            Class::Lan => lock_reads,
+            Class::Local => false,
+        };
     if !protected {
         return Decision::Allow;
     }
-    let min = if class == Class::Tunnel { MIN_REMOTE_TOKEN } else { 1 };
+    let min = if class == Class::Tunnel || app { MIN_REMOTE_TOKEN } else { 1 };
     let Some(token) = token.filter(|t| t.len() >= min) else {
         return Decision::RemoteDisabled;
     };
@@ -267,11 +273,15 @@ pub fn check_write(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
     let class = classify(addr.ip(), headers);
     let key = client_key(class, addr.ip(), headers);
     let now = Instant::now();
-    if limiter().locked(&key, now).is_some() {
+    let limited = limit_applies(s.cfg.app_mode, class);
+    if limited && limiter().locked(&key, now).is_some() {
         return false;
     }
     let presented = presented_token(headers, None);
     let ok = write_allowed(class, s.cfg.token.as_deref(), presented.as_deref());
+    if !limited {
+        return ok;
+    }
     if !ok && presented.is_some() && s.cfg.token.is_some() {
         limiter().fail(&key, now);
     } else if ok && presented.is_some() {
@@ -280,19 +290,26 @@ pub fn check_write(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
     ok
 }
 
+/// Wrong-token lockouts apply everywhere except loopback in app mode (see the module notes).
+pub fn limit_applies(app: bool, class: Class) -> bool {
+    !(app && class == Class::Local)
+}
+
 /// Middleware in front of every /api route and /ws.
 pub async fn gate(State(s): State<Shared>, ConnectInfo(addr): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Response {
     let headers = req.headers();
     let class = classify(addr.ip(), headers);
     let is_health = req.uri().path() == "/api/health";
     let presented = presented_token(headers, req.uri().query());
-    let decision = decide(class, is_health, s.cfg.token.as_deref(), s.cfg.lock_reads, presented.as_deref());
+    let app = s.cfg.app_mode;
+    let decision = decide(class, is_health, s.cfg.token.as_deref(), s.cfg.lock_reads, app, presented.as_deref());
     if decision == Decision::Allow && presented.is_none() {
         return next.run(req).await;
     }
     let key = client_key(class, addr.ip(), headers);
     let now = Instant::now();
-    if decision != Decision::Allow || class != Class::Local {
+    let limited = limit_applies(app, class);
+    if limited && (decision != Decision::Allow || class != Class::Local) {
         if let Some(secs) = limiter().locked(&key, now) {
             return too_many(secs);
         }
@@ -313,11 +330,13 @@ pub async fn gate(State(s): State<Shared>, ConnectInfo(addr): ConnectInfo<Socket
         Decision::RemoteDisabled => reply(
             StatusCode::FORBIDDEN,
             "remote_token_not_configured",
-            "remote access needs RHCSD_TOKEN of at least 20 characters in .env",
+            "this needs RHCSD_TOKEN of at least 20 characters",
         ),
         Decision::TokenMissing => reply(StatusCode::UNAUTHORIZED, "token_missing", "this backend needs an access token"),
         Decision::TokenWrong => {
-            limiter().fail(&key, now);
+            if limited {
+                limiter().fail(&key, now);
+            }
             reply(StatusCode::UNAUTHORIZED, "token_wrong", "wrong access token")
         }
     }
@@ -385,38 +404,38 @@ mod tests {
     #[test]
     fn tunnel_always_needs_token() {
         let t = Class::Tunnel;
-        assert_eq!(decide(t, false, Some(TOKEN), false, Some(TOKEN)), Decision::Allow);
-        assert_eq!(decide(t, false, Some(TOKEN), false, None), Decision::TokenMissing);
-        assert_eq!(decide(t, false, Some(TOKEN), false, Some("wrong")), Decision::TokenWrong);
-        assert_eq!(decide(t, true, Some(TOKEN), false, None), Decision::HealthOnly);
-        assert_eq!(decide(t, true, Some(TOKEN), false, Some("wrong")), Decision::TokenWrong);
+        assert_eq!(decide(t, false, Some(TOKEN), false, false, Some(TOKEN)), Decision::Allow);
+        assert_eq!(decide(t, false, Some(TOKEN), false, false, None), Decision::TokenMissing);
+        assert_eq!(decide(t, false, Some(TOKEN), false, false, Some("wrong")), Decision::TokenWrong);
+        assert_eq!(decide(t, true, Some(TOKEN), false, false, None), Decision::HealthOnly);
+        assert_eq!(decide(t, true, Some(TOKEN), false, false, Some("wrong")), Decision::TokenWrong);
         // unset or short token: refuse, never fall back to open
-        assert_eq!(decide(t, false, None, false, None), Decision::RemoteDisabled);
-        assert_eq!(decide(t, true, None, false, None), Decision::RemoteDisabled);
-        assert_eq!(decide(t, false, Some(SHORT), false, Some(SHORT)), Decision::RemoteDisabled);
-        assert_eq!(decide(t, false, None, false, Some("anything")), Decision::RemoteDisabled);
+        assert_eq!(decide(t, false, None, false, false, None), Decision::RemoteDisabled);
+        assert_eq!(decide(t, true, None, false, false, None), Decision::RemoteDisabled);
+        assert_eq!(decide(t, false, Some(SHORT), false, false, Some(SHORT)), Decision::RemoteDisabled);
+        assert_eq!(decide(t, false, None, false, false, Some("anything")), Decision::RemoteDisabled);
     }
 
     #[test]
     fn local_and_lan_rules() {
-        assert_eq!(decide(Class::Local, false, None, false, None), Decision::Allow);
-        assert_eq!(decide(Class::Local, false, Some(TOKEN), true, None), Decision::Allow);
-        assert_eq!(decide(Class::Lan, false, None, false, None), Decision::Allow);
-        assert_eq!(decide(Class::Lan, false, Some(TOKEN), false, None), Decision::Allow);
+        assert_eq!(decide(Class::Local, false, None, false, false, None), Decision::Allow);
+        assert_eq!(decide(Class::Local, false, Some(TOKEN), true, false, None), Decision::Allow);
+        assert_eq!(decide(Class::Lan, false, None, false, false, None), Decision::Allow);
+        assert_eq!(decide(Class::Lan, false, Some(TOKEN), false, false, None), Decision::Allow);
         // lock reads on the lan
-        assert_eq!(decide(Class::Lan, false, Some(TOKEN), true, None), Decision::TokenMissing);
-        assert_eq!(decide(Class::Lan, true, Some(TOKEN), true, None), Decision::HealthOnly);
-        assert_eq!(decide(Class::Lan, false, Some(TOKEN), true, Some(TOKEN)), Decision::Allow);
-        assert_eq!(decide(Class::Lan, false, Some(TOKEN), true, Some("x")), Decision::TokenWrong);
-        assert_eq!(decide(Class::Lan, false, None, true, None), Decision::RemoteDisabled);
+        assert_eq!(decide(Class::Lan, false, Some(TOKEN), true, false, None), Decision::TokenMissing);
+        assert_eq!(decide(Class::Lan, true, Some(TOKEN), true, false, None), Decision::HealthOnly);
+        assert_eq!(decide(Class::Lan, false, Some(TOKEN), true, false, Some(TOKEN)), Decision::Allow);
+        assert_eq!(decide(Class::Lan, false, Some(TOKEN), true, false, Some("x")), Decision::TokenWrong);
+        assert_eq!(decide(Class::Lan, false, None, true, false, None), Decision::RemoteDisabled);
     }
 
     #[test]
     fn websocket_query_token() {
         let p = presented_token(&hm(&[]), Some(&format!("token={TOKEN}")));
-        assert_eq!(decide(Class::Tunnel, false, Some(TOKEN), false, p.as_deref()), Decision::Allow);
+        assert_eq!(decide(Class::Tunnel, false, Some(TOKEN), false, false, p.as_deref()), Decision::Allow);
         let p = presented_token(&hm(&[]), Some("token=nope"));
-        assert_eq!(decide(Class::Tunnel, false, Some(TOKEN), false, p.as_deref()), Decision::TokenWrong);
+        assert_eq!(decide(Class::Tunnel, false, Some(TOKEN), false, false, p.as_deref()), Decision::TokenWrong);
     }
 
     #[test]

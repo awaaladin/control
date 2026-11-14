@@ -191,8 +191,8 @@ function HandoverCards() {
 }
 
 /** Live values of a connection's radio: from the WebSocket stores, which are fresher than the poll. */
-function radioOf(c: Connection | undefined, t: Telemetry | null, p: PhoneStatus | null) {
-  const src = c?.radio?.source ?? (c?.kind === 'phone' ? 'phone' : c?.kind === 'router' ? 'router' : c ? null : 'router');
+function radioOf(c: Connection | undefined, t: Telemetry | null, p: PhoneStatus | null, routerOn = true) {
+  const src = c?.radio?.source ?? (c?.kind === 'phone' ? 'phone' : c?.kind === 'router' ? 'router' : c ? null : routerOn ? 'router' : 'phone');
   if (src === 'router') return { src, rsrp: t?.rsrp, sinr: t?.sinr, rsrq: t?.rsrq };
   if (src === 'phone') return { src, rsrp: p?.rsrp, sinr: p?.sinr, rsrq: p?.rsrq };
   return { src: null, rsrp: null, sinr: null, rsrq: null };
@@ -227,7 +227,7 @@ function ConnectionsStrip({ list, best, t, p, onPick }: { list: Connection[]; be
     <Panel kicker="Every internet connection of this computer" title="Connections" className="connstrip">
       <ul className="connstrip__list">
         {list.map((c) => {
-          const r = radioOf(c, t, p);
+          const r = radioOf(c, t, p, true);
           return (
             <li key={c.id} className={`connstrip__item ${c.id === best ? 'is-best' : ''}`}>
               <button type="button" className="connstrip__name linkbtn" onClick={() => onPick(c.id)}>
@@ -262,6 +262,56 @@ function ConnectionsStrip({ list, best, t, p, onPick }: { list: Connection[]; be
   );
 }
 
+/** Nothing has reported a radio reading yet: say which ways in exist and what this page sees of each. */
+function NoSignalSource() {
+  const sources = useStore((s) => s.sources);
+  const inApp = useStore((s) => s.health?.app_mode === true);
+  const routerOn = sources?.router_configured !== false;
+  const router = sources?.router;
+  const phone = sources?.phone;
+  return (
+    <Panel kicker="Waiting for a reading" title="No signal source yet" className="nosignal">
+      <p>
+        No signal source yet. Plug your phone into this computer by USB, open the PULSE Android app, or join your 4G router's Wi-Fi.
+      </p>
+      <ul className="nosignal__list small">
+        {inApp ? (
+          <li>
+            <strong>This phone:</strong>{' '}
+            {phone?.online ? 'reading now.' : 'the app has not sent a reading yet. Allow Location and Phone access for PULSE and turn Location on.'}
+          </li>
+        ) : (
+          <>
+            <li>
+              <strong>Phone over USB:</strong>{' '}
+              {phone?.online ? 'connected.' : phone?.error ? `not found (${phone.error}).` : 'no phone found by this system yet. Turn on USB debugging and plug it in.'}
+            </li>
+            <li>
+              <strong>PULSE Android app:</strong> install it on the phone and open it: it reads the phone's own signal, no cable needed.
+            </li>
+          </>
+        )}
+        {routerOn ? (
+          <li>
+            <strong>4G router{router?.host ? ` (${router.host})` : ''}:</strong>{' '}
+            {router?.online
+              ? router.logged_in === false
+                ? 'found, but not logged in (check the admin password).'
+                : 'connected.'
+              : router?.error
+                ? `not answering (${router.error}). Join its Wi-Fi or plug in its cable.`
+                : 'not answering yet. Join its Wi-Fi or plug in its cable.'}
+          </li>
+        ) : (
+          <li>
+            <strong>4G router:</strong> none set up on this system, which is fine on a phone.
+          </li>
+        )}
+      </ul>
+    </Panel>
+  );
+}
+
 export function SignalPage() {
   useConnectionsPolling(4000);
   const conns = useConnections((s) => s.view);
@@ -274,13 +324,17 @@ export function SignalPage() {
   const telemetryAt = useStore((s) => s.telemetryAt);
   const phoneAt = useStore((s) => s.phoneAt);
   const routerSrc = useStore((s) => s.sources?.router);
+  const routerOn = useStore((s) => s.sources?.router_configured !== false);
   const picked = useStore((s) => s.signalConn);
   const now = useNow(1000);
 
   const list = conns?.connections ?? [];
-  const selected = list.find((c) => c.id === picked) ?? list.find((c) => c.in_use) ?? list.find((c) => c.kind === 'router') ?? list[0];
+  // Without a router (the app) the phone's own connection is the one shown.
+  const selected = routerOn
+    ? (list.find((c) => c.id === picked) ?? list.find((c) => c.in_use) ?? list.find((c) => c.kind === 'router') ?? list[0])
+    : (list.find((c) => c.id === picked) ?? list.find((c) => c.kind === 'phone') ?? list.find((c) => c.in_use) ?? list[0]);
   const pick = (id: string) => useStore.setState({ signalConn: id });
-  const r = radioOf(selected, t, p);
+  const r = radioOf(selected, t, p, routerOn);
   const isPhone = r.src === 'phone';
   const isRouter = r.src === 'router';
   const at = isPhone ? phoneAt : telemetryAt;
@@ -297,7 +351,7 @@ export function SignalPage() {
         <div>
           <div className="pagehead__kicker">
             {selected ? `${selected.name} · ` : ''}
-            {isPhone ? `${bandLabel(p?.band)} · PCI ${fmt(p?.pci)}` : isRouter ? `${t?.network_type ? `${t.network_type} · ` : ''}${bandLabel(t?.band)} · PCI ${fmt(t?.pci)}` : 'no radio data'}
+            {isPhone ? `${p?.operator ? `${p.operator} · ` : ''}${p?.network_type ? `${p.network_type} · ` : ''}${bandLabel(p?.band)} · PCI ${fmt(p?.pci)}` : isRouter ? `${t?.network_type ? `${t.network_type} · ` : ''}${bandLabel(t?.band)} · PCI ${fmt(t?.pci)}` : 'no radio data'}
           </div>
           <h1 className="pagehead__title">Signal</h1>
         </div>
@@ -313,7 +367,7 @@ export function SignalPage() {
 
       <ConnectionPicker list={list} selected={selected?.id ?? null} onPick={pick} />
 
-      {isRouter && routerSrc && !routerSrc.online && routerSrc.error && conn !== 'demo' ? (
+      {isRouter && routerOn && routerSrc && !routerSrc.online && routerSrc.error && conn !== 'demo' ? (
         <ErrorExplain e={explainError('router', routerSrc.error)} />
       ) : isRouter && routerSrc?.online && routerSrc.logged_in === false && routerSrc.error && conn !== 'demo' ? (
         <ErrorExplain e={explainError('router', routerSrc.error)} />
@@ -323,6 +377,8 @@ export function SignalPage() {
           No radio readings for <strong>{selected.name}</strong>: {selected.radio_note}.
         </p>
       ) : null}
+
+      {!t && !p && conn !== 'connecting' && conn !== 'demo' && telemetryAt === null && phoneAt === null ? <NoSignalSource /> : null}
 
       <section className="rings" aria-label="Signal gauges">
         <MetricRing metric="rsrp" value={r.rsrp} isStaleFn={staleFn} />
@@ -353,7 +409,7 @@ export function SignalPage() {
             <span className="rate__v num">{fmtBytes(isNum(t?.session_rx_bytes) || isNum(t?.session_tx_bytes) ? (t?.session_rx_bytes ?? 0) + (t?.session_tx_bytes ?? 0) : null)}</span>
           </div>
         </section>
-      ) : selected ? (
+      ) : selected && routerOn ? (
         <p className="connnote muted small">
           Live throughput is only known for the router's connection (the router reports it). Ping for this connection:{' '}
           {isNum(selected.ping?.ping_ms) ? `${fmt(selected.ping!.ping_ms)} ms (last Game Boost run)` : 'run Game Boost to measure it'}.

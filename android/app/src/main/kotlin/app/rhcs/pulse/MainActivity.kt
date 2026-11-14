@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -27,6 +28,8 @@ import android.widget.EditText
 import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.appcompat.widget.SwitchCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -45,7 +48,7 @@ import kotlinx.coroutines.withContext
  */
 class MainActivity : AppCompatActivity() {
 
-    private data class Row(val title: String, val sub: String, val url: String, val isHub: Boolean)
+    private data class Row(val title: String, val sub: String, val url: String, val isHub: Boolean, val isLocal: Boolean = false)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var scanJob: Job? = null
@@ -59,6 +62,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var closeButton: Button
     private lateinit var addr: EditText
     private lateinit var token: EditText
+    private lateinit var engineSwitch: SwitchCompat
+    private lateinit var engineStatus: TextView
+    private lateinit var intro: View
+    private lateinit var introText: TextView
+    private var settingSwitch = false
+    private var waitJob: Job? = null
 
     private val prefs by lazy { getSharedPreferences("pulse", Context.MODE_PRIVATE) }
     private var currentHub: String? = null
@@ -80,6 +89,17 @@ class MainActivity : AppCompatActivity() {
         pendingMic = null
     }
 
+    /** Location, phone state and (Android 13+) notifications, asked once the user said yes to the engine. */
+    private val enginePerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)) {
+            startLocalEngine()
+        } else {
+            Engine.setEnabled(this, false)
+            showFinder("The built-in engine needs Location to read this phone's cells. Turn it on with the switch below when you are ready.")
+            updateEngineStatus()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -93,6 +113,39 @@ class MainActivity : AppCompatActivity() {
         closeButton = findViewById(R.id.closeButton)
         addr = findViewById(R.id.addr)
         token = findViewById(R.id.token)
+        engineSwitch = findViewById(R.id.engineSwitch)
+        engineStatus = findViewById(R.id.engineStatus)
+        intro = findViewById(R.id.intro)
+        introText = findViewById(R.id.introText)
+
+        val ocid = findViewById<EditText>(R.id.ocid)
+        ocid.setText(prefs.getString("ocid", ""))
+        ocid.doAfterTextChanged { prefs.edit().putString("ocid", it?.toString()?.trim().orEmpty()).apply() }
+
+        engineSwitch.setOnCheckedChangeListener { _, on ->
+            if (settingSwitch) return@setOnCheckedChangeListener
+            if (on) enableEngine() else {
+                EngineService.stop(this)
+                Engine.setEnabled(this, false)
+            }
+        }
+        findViewById<Button>(R.id.introContinue).setOnClickListener {
+            intro.visibility = View.GONE
+            enableEngine()
+        }
+        findViewById<Button>(R.id.introOther).setOnClickListener {
+            // "Not now" is remembered: the engine stays off and the finder and remote features work as before.
+            Engine.setEnabled(this, false)
+            intro.visibility = View.GONE
+            showFinder("The built-in engine is off. You can open another PULSE system, or turn the engine on below.")
+            startScan()
+        }
+        scope.launch {
+            while (true) {
+                updateEngineStatus()
+                kotlinx.coroutines.delay(1500)
+            }
+        }
 
         adapter = object : ArrayAdapter<Row>(this, 0, shown) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
@@ -106,7 +159,11 @@ class MainActivity : AppCompatActivity() {
         list.adapter = adapter
         list.setOnItemClickListener { _, _, position, _ ->
             val row = shown[position]
-            if (row.isHub) openHub(row.url, null) else tryAddress(row.url, null)
+            when {
+                row.isLocal -> enableEngine()
+                row.isHub -> openHub(row.url, null)
+                else -> tryAddress(row.url, null)
+            }
         }
 
         findViewById<Button>(R.id.scanButton).setOnClickListener { startScan() }
@@ -128,6 +185,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    intro.visibility == View.VISIBLE -> Unit
                     finder.visibility == View.VISIBLE && currentHub != null -> hideFinder()
                     finder.visibility != View.VISIBLE && web.canGoBack() -> web.goBack()
                     else -> {
@@ -172,8 +230,12 @@ class MainActivity : AppCompatActivity() {
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) {
-                    showFinder("Can't reach ${request.url.host}. Scanning for your system…")
-                    startScan()
+                    if (currentHub == Engine.BASE) {
+                        showFinder("The built-in engine isn't answering. Check its state below.")
+                    } else {
+                        showFinder("Can't reach ${request.url.host}. Scanning for your system…")
+                        startScan()
+                    }
                 }
             }
         }
@@ -206,10 +268,120 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ finder
 
+    // ------------------------------------------------------------------ built-in engine
+
+    private fun needed(): Array<String> {
+        val l = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.READ_PHONE_STATE)
+        if (Build.VERSION.SDK_INT >= 33) l += Manifest.permission.POST_NOTIFICATIONS
+        return l.toTypedArray()
+    }
+
+    /** First run: ask in plain words before anything starts. */
+    private fun showConsent() {
+        introText.text = "PULSE runs a small engine on this phone to read your signal and the cell tower you are on. " +
+            "It stays on the phone: your readings are not sent anywhere. The only thing that leaves is a look-up of " +
+            "a tower's ID (never where you are) to a public tower database, so the tower can be placed on the map.\n\n" +
+            "For this Android asks for Location and Phone access (it only shows cell data to apps that have them) " +
+            "and Notifications (so you can see the engine is on and stop it).\n\nStart it?"
+        findViewById<Button>(R.id.introContinue).text = "Start"
+        findViewById<Button>(R.id.introOther).text = "Not now"
+        intro.visibility = View.VISIBLE
+        finder.visibility = View.GONE
+    }
+
+    /** The user wants the engine on: consent first if never asked, then permissions, then start. */
+    private fun enableEngine() {
+        if (!Engine.supported()) {
+            showFinder("This phone is 32-bit: the built-in engine is not supported. You can still open another PULSE system.")
+            return
+        }
+        if (!Engine.asked(this)) {
+            showConsent()
+            return
+        }
+        Engine.setEnabled(this, true)
+        val location = granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (location && (needed().all { granted(it) } || prefs.getBoolean("permsAsked", false))) {
+            startLocalEngine()
+        } else {
+            prefs.edit().putBoolean("permsAsked", true).apply()
+            enginePerms.launch(needed())
+        }
+    }
+
+    private fun startLocalEngine() {
+        Engine.setEnabled(this, true)
+        Engine.stoppedByUser = false
+        EngineService.start(this)
+        showFinder("Starting the built-in engine…")
+        waitJob?.cancel()
+        waitJob = scope.launch {
+            var ok = false
+            for (i in 0 until 120) {
+                ok = withContext(Dispatchers.IO) { Engine.healthy(this@MainActivity) }
+                if (ok || Engine.state == "error" && i > 20) break
+                kotlinx.coroutines.delay(500)
+            }
+            if (ok) openLocal() else status.text = "The built-in engine did not start: ${Engine.error ?: "no answer"}"
+        }
+    }
+
+    private fun openLocal() {
+        prefs.edit().putString("hub", Engine.LOCAL).apply()
+        currentHub = Engine.BASE
+        progress.visibility = View.GONE
+        hideFinder()
+        // The pairing fragment hands PULSE this install's token; it stays on the phone.
+        web.loadUrl("${Engine.BASE}/#hub=${Uri.encode(Engine.BASE)}&token=${Uri.encode(Engine.token(this))}")
+    }
+
+    private fun engineLine(): String = when {
+        !Engine.supported() -> "Built-in engine: not available (this phone is 32-bit)."
+        Engine.state == "running" -> "Built-in engine: running." + (Engine.reporterNote?.let { "\n$it" } ?: "")
+        Engine.state == "starting" -> "Built-in engine: starting…"
+        Engine.state == "error" -> "Built-in engine: problem: ${Engine.error ?: "unknown"}"
+        Engine.stoppedByUser || (Engine.asked(this) && !Engine.enabled(this)) -> "Built-in engine: Stopped by you. Use the switch to start it again."
+        else -> "Built-in engine: off."
+    }
+
+    private fun updateEngineStatus() {
+        val on = Engine.state == "running" || Engine.state == "starting" || Engine.state == "error"
+        settingSwitch = true
+        engineSwitch.isChecked = on
+        engineSwitch.isEnabled = Engine.supported()
+        settingSwitch = false
+        val log = if (Engine.state == "error") Engine.tailLog(this, 4).joinToString("\n") else ""
+        engineStatus.text = engineLine() + (if (log.isNotEmpty()) "\n$log" else "")
+        // the first row of the finder follows the engine's state
+        if (finder.visibility == View.VISIBLE) refreshList()
+    }
+
+    private fun localRow(): Row? {
+        if (!Engine.supported()) return null
+        val sub = when (Engine.state) {
+            "running" -> "Running. Reads this phone's own signal and tower: no laptop or router needed.\nTap to open"
+            "starting" -> "Starting…"
+            "error" -> "Problem: ${Engine.error ?: "unknown"}\nTap to try again"
+            else -> if (Engine.asked(this) && !Engine.enabled(this)) "Stopped by you.\nTap to start it again" else "Off.\nTap to turn it on"
+        }
+        return Row("This phone (built-in engine)", sub, Engine.BASE, true, isLocal = true)
+    }
+
     private fun startup() {
         val saved = prefs.getString("hub", null)
-        if (saved == null) {
-            showFinder("Looking for your system…")
+        if (Engine.supported() && (saved == null || saved == Engine.LOCAL)) {
+            if (!Engine.asked(this)) {
+                showConsent()
+            } else if (Engine.enabled(this)) {
+                enableEngine()
+            } else {
+                showFinder("The built-in engine is off. Turn it on below, or open another PULSE system.")
+                startScan()
+            }
+            return
+        }
+        if (saved == null || saved == Engine.LOCAL) {
+            showFinder("This phone is 32-bit: the built-in engine is not supported. Looking for another PULSE system…")
             startScan()
             return
         }
@@ -245,6 +417,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshList() {
         shown.clear()
+        localRow()?.let { shown.add(it) }
         shown.addAll(hubRows)
         shown.addAll(otherRows.sortedBy { r -> r.url.substringAfter("//").substringBefore(":").substringAfterLast('.').toIntOrNull() ?: 0 })
         adapter.notifyDataSetChanged()
@@ -356,6 +529,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        waitJob?.cancel()
         scope.cancel()
         web.destroy()
         super.onDestroy()

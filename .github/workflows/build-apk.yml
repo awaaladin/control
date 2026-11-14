@@ -3,9 +3,14 @@ name: Build APK
 on:
   push:
     branches: [main]
-    # Only rebuild the app when the app (or this workflow) changes.
+    # Rebuild when the app, the engine it carries (crates), the dashboard it carries (web) or this workflow changes.
     paths:
       - "android/**"
+      - "crates/**"
+      - "web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
       - ".github/workflows/build-apk.yml"
   workflow_dispatch:
 
@@ -21,11 +26,48 @@ jobs:
     # Needed to update the public download release below.
     permissions:
       contents: write
-    defaults:
-      run:
-        working-directory: android
     steps:
       - uses: actions/checkout@v4
+
+      # The engine: rhcsd for 64-bit ARM Android, a static musl binary (no NDK needed),
+      # shipped inside the APK as an "executable named like a library".
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-musl
+
+      - name: Build the engine (rhcsd, aarch64 musl)
+        run: cargo build --release --target aarch64-unknown-linux-musl -p rhcsd
+
+      - name: Put the engine into the app
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-unknown-linux-musl/release/rhcsd android/app/src/main/jniLibs/arm64-v8a/librhcsd.so
+          ls -l android/app/src/main/jniLibs/arm64-v8a/librhcsd.so
+          file android/app/src/main/jniLibs/arm64-v8a/librhcsd.so
+
+      # The dashboard the app serves from its own engine.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build PULSE (web)
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Put PULSE into the app
+        run: |
+          rm -rf android/app/src/main/assets/pulse-web
+          mkdir -p android/app/src/main/assets
+          cp -r web/dist android/app/src/main/assets/pulse-web
+          ls android/app/src/main/assets/pulse-web | head
 
       - uses: actions/setup-java@v4
         with:
@@ -35,9 +77,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Make gradlew executable
+        working-directory: android
         run: chmod +x ./gradlew
 
       - name: Build debug APK
+        working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4
@@ -53,7 +97,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk pulse.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk pulse.apk
           gh release delete android-latest --cleanup-tag --yes || true
           gh release create android-latest pulse.apk \
             --target "$GITHUB_SHA" \

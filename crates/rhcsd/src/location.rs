@@ -231,6 +231,72 @@ async fn signal_now(s: &Shared) -> crate::places::Signal {
     }
 }
 
+/// Makes a fix the phone's current position: the source state, the WebSocket feed, the tower
+/// map's origin and (if fresh and precise) a sample for the automatic places. Used by the
+/// ADB/Termux poller below and by the app's `POST /api/location/push`.
+pub async fn publish_fix(s: &Shared, fix: Fix, now: i64) {
+    {
+        let mut i = s.inner.write().await;
+        i.sources.location.online = true;
+        i.sources.location.error = None;
+        i.sources.location.last_ok = Some(now);
+    }
+    *s.location.write().await = Some(fix.clone());
+    s.send(json!({ "type": "location", "ts": now, "data": fix }));
+    let age = fix.age_ms(now);
+    if age <= FRESH_MS {
+        s.towers
+            .set_current(Location { lat: fix.lat, lon: fix.lon, accuracy_m: fix.accuracy_m, source: "phone".into(), ts: fix.fix_ts })
+            .await;
+    }
+    if age <= PLACE_MAX_AGE_MS {
+        let sig = signal_now(s).await;
+        s.places.observe(fix.lat, fix.lon, fix.accuracy_m, now, sig).await;
+    }
+}
+
+/// Validates the app's `{lat, lon, accuracy_m, ts, source}`. `ts` (ms since epoch) defaults to
+/// now; fixes from the future (beyond clock skew) or older than a day are refused.
+pub fn parse_push(v: &Value, now: i64) -> Result<Fix, String> {
+    let o = v.as_object().ok_or("the body must be a JSON object")?;
+    let lat = o.get("lat").and_then(Value::as_f64).ok_or("lat is required (a number)")?;
+    let lon = o.get("lon").and_then(Value::as_f64).ok_or("lon is required (a number)")?;
+    if !valid(lat, lon) {
+        return Err("lat must be -90..90 and lon -180..180 (and not 0,0)".into());
+    }
+    let accuracy_m = match o.get("accuracy_m") {
+        None | Some(Value::Null) => None,
+        Some(a) => {
+            let a = a.as_f64().filter(|a| a.is_finite() && *a >= 0.0 && *a <= 100_000.0).ok_or("accuracy_m must be 0..100000")?;
+            (a > 0.0).then_some(a)
+        }
+    };
+    let ts = match o.get("ts") {
+        None | Some(Value::Null) => now,
+        Some(t) => t.as_i64().ok_or("ts must be whole milliseconds since 1970")?,
+    };
+    if ts > now + 5 * 60_000 || ts < now - 24 * 3_600_000 {
+        return Err("ts is in the future or more than a day old".into());
+    }
+    let provider: String = o
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(16)
+        .collect();
+    Ok(Fix {
+        lat,
+        lon,
+        accuracy_m,
+        provider: if provider.is_empty() { "unknown".into() } else { provider },
+        via: "app".into(),
+        fix_ts: ts.min(now),
+        read_ts: now,
+    })
+}
+
 pub async fn run(s: Shared) {
     let termux = crate::phone::in_termux();
     let mut last_err: Option<String> = None;
@@ -246,27 +312,10 @@ pub async fn run(s: Shared) {
         match res {
             Ok(Some(raw)) => {
                 let fix = date(raw, if termux { "termux" } else { "adb" }, now);
-                {
-                    let mut i = s.inner.write().await;
-                    i.sources.location.online = true;
-                    i.sources.location.error = None;
-                    i.sources.location.last_ok = Some(now);
-                }
                 if last_err.take().is_some() {
                     s.event("location", format!("phone position available ({}, about {:.0} m)", fix.provider, fix.accuracy_m.unwrap_or(0.0)), json!({})).await;
                 }
-                *s.location.write().await = Some(fix.clone());
-                s.send(json!({ "type": "location", "ts": now, "data": fix }));
-                let age = fix.age_ms(now);
-                if age <= FRESH_MS {
-                    s.towers
-                        .set_current(Location { lat: fix.lat, lon: fix.lon, accuracy_m: fix.accuracy_m, source: "phone".into(), ts: fix.fix_ts })
-                        .await;
-                }
-                if age <= PLACE_MAX_AGE_MS {
-                    let sig = signal_now(&s).await;
-                    s.places.observe(fix.lat, fix.lon, fix.accuracy_m, now, sig).await;
-                }
+                publish_fix(&s, fix, now).await;
             }
             Ok(None) => unreachable!(),
             Err(e) => {
@@ -343,6 +392,37 @@ Location Manager State:
         // Without an uptime the age is unknown and treated as old.
         let f = parse_dumpsys_location("Location[gps 1.5,2.5 acc=5 et=+10s0ms]").unwrap();
         assert!(f.age_ms > PLACE_MAX_AGE_MS);
+    }
+
+    #[test]
+    fn push_validation() {
+        let now = 1_700_000_000_000i64;
+        let ok = json!({"lat": 1.5, "lon": 2.5, "accuracy_m": 12.5, "ts": now - 4000, "source": "gps"});
+        let f = parse_push(&ok, now).unwrap();
+        assert_eq!((f.lat, f.lon, f.accuracy_m, f.fix_ts, f.via.as_str(), f.provider.as_str()), (1.5, 2.5, Some(12.5), now - 4000, "app", "gps"));
+        // ts defaults to now; a slightly-future ts is clamped, a far-future one refused
+        assert_eq!(parse_push(&json!({"lat": 1.5, "lon": 2.5}), now).unwrap().fix_ts, now);
+        assert_eq!(parse_push(&json!({"lat": 1.5, "lon": 2.5, "ts": now + 60_000}), now).unwrap().fix_ts, now);
+        for bad in [
+            json!({"lat": 91.0, "lon": 2.5}),
+            json!({"lat": 1.5, "lon": 181.0}),
+            json!({"lat": 0.0, "lon": 0.0}),
+            json!({"lat": "1.5", "lon": 2.5}),
+            json!({"lon": 2.5}),
+            json!({"lat": 1.5, "lon": 2.5, "accuracy_m": -3.0}),
+            json!({"lat": 1.5, "lon": 2.5, "accuracy_m": "x"}),
+            json!({"lat": 1.5, "lon": 2.5, "ts": now + 3_600_000}),
+            json!({"lat": 1.5, "lon": 2.5, "ts": now - 2 * 86_400_000}),
+            json!({"lat": 1.5, "lon": 2.5, "ts": "now"}),
+            json!([1, 2]),
+            json!("x"),
+            json!(null),
+        ] {
+            assert!(parse_push(&bad, now).is_err(), "{bad}");
+        }
+        // odd provider text is cleaned, not trusted
+        let f = parse_push(&json!({"lat": 1.5, "lon": 2.5, "source": "<b>gps</b>\n"}), now).unwrap();
+        assert_eq!(f.provider, "bgpsb");
     }
 
     #[test]

@@ -264,8 +264,8 @@ pub struct Places {
 }
 
 impl Places {
-    pub fn new() -> Self {
-        let path = rhcs_core::env::project_dir().join("data").join("places.json");
+    pub fn open(dir: &std::path::Path) -> Self {
+        let path = dir.join("places.json");
         let mut book: PlaceBook = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
