@@ -467,3 +467,32 @@
 .engine-prompt__small, .engine-card__small { font-size: 12px; margin: 8px 0 0; }
 .engine-prompt__foot { display: flex; justify-content: flex-end; margin-top: 10px; }
 .engine-card .actions { margin-top: 10px; }
+
+/* ------------------------------------------------------------------ automatic aim mode */
+.aim__coach {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+.aim__trend { font-weight: 700; font-size: 17px; letter-spacing: 0.01em; }
+.aim__advice { font-size: 13.5px; opacity: 0.85; }
+.aim__coach.is-up { border-color: rgba(92, 232, 128, 0.55); }
+.aim__coach.is-up .aim__trend { color: rgb(92, 232, 128); }
+.aim__coach.is-down { border-color: rgba(255, 122, 56, 0.55); }
+.aim__coach.is-down .aim__trend { color: rgb(255, 122, 56); }
+.aim__coach.is-flat .aim__trend { color: var(--muted, #9aa8b8); }
+.spot__auto {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent, #2be3b1);
+  border: 1px solid rgba(43, 227, 177, 0.4);
+}

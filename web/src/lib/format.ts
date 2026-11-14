@@ -55,6 +55,88 @@ export const gradeColor = (g: Grade, a = 1): string => {
   return `rgba(${r},${gg},${b},${a})`;
 };
 
+// ---------------------------------------------------------------- continuous quality colour
+// One smooth scale for every dial, chart and meter: 0 = poor (red) … 1 = excellent (green).
+// The grade edges sit at 0.30 (poor→fair), 0.60 (fair→good) and 0.85 (good→excellent), so the
+// colour always agrees with the grade word. There is no colour at all without a reading.
+const SCORE_STOPS: [number, [number, number, number]][] = [
+  [0.0, [255, 62, 78]], // red
+  [0.3, [255, 122, 56]], // orange-red (fair starts)
+  [0.45, [255, 184, 60]], // orange
+  [0.6, [247, 226, 66]], // yellow (good starts)
+  [0.75, [170, 232, 84]], // yellow-green
+  [0.85, [92, 232, 128]], // green (excellent starts)
+  [1.0, [46, 240, 150]], // bright green
+];
+
+export function scoreRGB(score: number): [number, number, number] {
+  const s = Math.max(0, Math.min(1, score));
+  for (let i = 0; i < SCORE_STOPS.length - 1; i++) {
+    const [a, ca] = SCORE_STOPS[i];
+    const [b, cb] = SCORE_STOPS[i + 1];
+    if (s <= b) {
+      const t = b === a ? 0 : (s - a) / (b - a);
+      return [ca[0] + (cb[0] - ca[0]) * t, ca[1] + (cb[1] - ca[1]) * t, ca[2] + (cb[2] - ca[2]) * t];
+    }
+  }
+  return SCORE_STOPS[SCORE_STOPS.length - 1][1];
+}
+
+export const scoreColor = (score: number, a = 1): string => {
+  const [r, g, b] = scoreRGB(score);
+  return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a})`;
+};
+
+const GRADE_RANK: Record<Grade, number> = { none: -1, poor: 0, fair: 1, good: 2, excellent: 3 };
+
+/**
+ * Builds value → score (0..1) for any grading function over a value range, whichever way round
+ * it works (higher-is-better like signal, or lower-is-better like ping). The grade edges are
+ * found by sampling the grading function, so the colour can never disagree with the grade.
+ */
+export function makeScorer(
+  gradeOf: (v: number | null | undefined) => Grade,
+  range: [number, number],
+): (v: number) => number {
+  const [a, b] = range;
+  const N = 96;
+  const at = (i: number) => a + ((b - a) * i) / N;
+  const forward = GRADE_RANK[gradeOf(b)] >= GRADE_RANK[gradeOf(a)];
+  const worst = forward ? a : b;
+  const best = forward ? b : a;
+  const edge = (rank: number, fallback: number): number => {
+    let prev = worst;
+    for (let k = 0; k <= N; k++) {
+      const v = forward ? at(k) : at(N - k);
+      if (GRADE_RANK[gradeOf(v)] >= rank) return k === 0 ? v : (prev + v) / 2;
+      prev = v;
+    }
+    return fallback;
+  };
+  const e1 = edge(1, worst);
+  const e2 = edge(2, e1);
+  const e3 = edge(3, e2);
+  const pts: [number, number][] = [
+    [worst, 0],
+    [e1, 0.3],
+    [e2, 0.6],
+    [e3, 0.85],
+    [best, 1],
+  ];
+  return (v: number) => {
+    const t = best === worst ? 1 : (v - worst) / (best - worst);
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [v0, s0] = pts[i];
+      const [v1, s1] = pts[i + 1];
+      if (v0 === v1) continue;
+      if (v >= Math.min(v0, v1) && v <= Math.max(v0, v1)) return s0 + ((v - v0) / (v1 - v0)) * (s1 - s0);
+    }
+    return t;
+  };
+}
+
 export const GRADE_LABEL: Record<Grade, string> = {
   excellent: 'Excellent',
   good: 'Good',

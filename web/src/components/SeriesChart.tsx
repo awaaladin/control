@@ -22,6 +22,8 @@ import {
   grade,
   GRADE_LABEL,
   gradeColor,
+  makeScorer,
+  scoreColor,
   LABELS,
   type Metric,
   prefersReducedMotion,
@@ -97,18 +99,19 @@ export function SeriesChart({ metric, height = 170, buffer, source = 'router' }:
     const yOf = (v: number) => p.y + p.h - ((v - lo) / (hi - lo)) * p.h;
     const clampY = (v: number) => Math.max(p.y, Math.min(p.y + p.h, yOf(v)));
 
-    // Grade bands.
-    const bands: [number, number, ReturnType<typeof grade>][] = [
-      [e, hi, 'excellent'],
-      [g, e, 'good'],
-      [f, g, 'fair'],
-      [lo, f, 'poor'],
+    // Grade bands, tinted with the same continuous scale as the dials.
+    const scorer = makeScorer((v) => grade(metric, v), [lo, hi]);
+    const bands: [number, number, number][] = [
+      [e, hi, 0.95],
+      [g, e, 0.72],
+      [f, g, 0.45],
+      [lo, f, 0.12],
     ];
-    for (const [a, b, gr] of bands) {
+    for (const [a, b, sc] of bands) {
       const ya = clampY(Math.max(a, lo));
       const yb = clampY(Math.min(b, hi));
       if (ya - yb <= 0) continue;
-      ctx.fillStyle = gradeColor(gr, 0.045);
+      ctx.fillStyle = scoreColor(sc, 0.045);
       ctx.fillRect(p.x, yb, p.w, ya - yb);
     }
     ctx.save();
@@ -116,7 +119,7 @@ export function SeriesChart({ metric, height = 170, buffer, source = 'router' }:
     for (const th of [e, g, f]) {
       if (th <= lo || th >= hi) continue;
       const y = Math.round(yOf(th)) + 0.5;
-      ctx.strokeStyle = gradeColor(grade(metric, th), 0.3);
+      ctx.strokeStyle = scoreColor(scorer(th), 0.35);
       ctx.beginPath();
       ctx.moveTo(p.x, y);
       ctx.lineTo(p.x + p.w, y);
@@ -148,19 +151,13 @@ export function SeriesChart({ metric, height = 170, buffer, source = 'router' }:
     ctx.clip();
 
     const stroke = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
-    const stop = (v: number) => Math.max(0, Math.min(1, (yOf(v) - p.y) / p.h));
+    // Smooth colour along the value axis: green at the top (best) fading through yellow and orange to red.
     const addStops = (gr: CanvasGradient, a: number) => {
-      const pts: [number, string][] = [
-        [0, gradeColor('excellent', a)],
-        [stop(e), gradeColor('excellent', a)],
-        [stop(e), gradeColor('good', a)],
-        [stop(g), gradeColor('good', a)],
-        [stop(g), gradeColor('fair', a)],
-        [stop(f), gradeColor('fair', a)],
-        [stop(f), gradeColor('poor', a)],
-        [1, gradeColor('poor', a)],
-      ];
-      for (const [o, col] of pts) gr.addColorStop(o, col);
+      const N = 18;
+      for (let k = 0; k <= N; k++) {
+        const v = hi - ((hi - lo) * k) / N;
+        gr.addColorStop(k / N, scoreColor(scorer(v), a));
+      }
     };
     addStops(stroke, 1);
     const fill = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
@@ -203,7 +200,7 @@ export function SeriesChart({ metric, height = 170, buffer, source = 'router' }:
         const x = p.x + ((samples.ts[last] - t0) / windowMs) * p.w;
         const y = yOf(v);
         const pulse = stale || !smooth ? 0.5 : 0.5 + 0.5 * Math.sin(now / 320);
-        ctx.fillStyle = gradeColor(stale ? 'none' : grade(metric, v), 1);
+        ctx.fillStyle = stale ? gradeColor('none', 1) : scoreColor(scorer(v), 1);
         ctx.shadowColor = ctx.fillStyle;
         ctx.shadowBlur = 6 + 8 * pulse;
         ctx.beginPath();
@@ -227,13 +224,14 @@ export function SeriesChart({ metric, height = 170, buffer, source = 'router' }:
         const v = samples.cols[metric][i];
         const gr = grade(metric, Number.isNaN(v) ? null : v);
         lines.push({ text: fmtTime(samples.ts[i]), color: 'rgba(170,190,205,0.8)' });
-        lines.push({ text: `${LABELS[metric]} ${fmt(Number.isNaN(v) ? null : v, digits)} ${unit}`, color: gradeColor(gr), bold: true });
-        lines.push({ text: GRADE_LABEL[gr], color: gradeColor(gr, 0.8) });
+        const tipColor = (a: number) => (Number.isNaN(v) ? gradeColor('none', a) : scoreColor(scorer(v), a));
+        lines.push({ text: `${LABELS[metric]} ${fmt(Number.isNaN(v) ? null : v, digits)} ${unit}`, color: tipColor(1), bold: true });
+        lines.push({ text: GRADE_LABEL[gr], color: tipColor(0.8) });
         const pci = samples.cols.pci[i];
         const band = samples.cols.band[i];
         lines.push({ text: `PCI ${fmt(Number.isNaN(pci) ? null : pci)} · ${bandLabel(Number.isNaN(band) ? null : band)}`, color: 'rgba(170,190,205,0.8)' });
         if (!Number.isNaN(v)) {
-          ctx.fillStyle = gradeColor(gr);
+          ctx.fillStyle = tipColor(1);
           ctx.beginPath();
           ctx.arc(p.x + ((samples.ts[i] - t0) / windowMs) * p.w, yOf(v), 4, 0, Math.PI * 2);
           ctx.fill();

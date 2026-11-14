@@ -79,6 +79,8 @@ export interface MarkedSpot {
   pci: number | null;
   cell_id: number | null;
   band: number | null;
+  /** Recorded automatically by Aim mode (not marked by hand). */
+  auto?: boolean;
   /** Automatic place the phone was at when the spot was marked (if known). */
   place_id?: number | null;
 }

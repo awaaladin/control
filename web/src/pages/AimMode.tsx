@@ -8,17 +8,40 @@ import { isStale, STALE_MS, toast, useStore } from '../lib/store';
 import { useTick } from '../lib/ticker';
 import { refreshPlaces, usePlaces } from '../lib/towers';
 
-const stale = () => isStale(useStore.getState().telemetryAt, STALE_MS.telemetry);
+/** Aim mode follows the router's reading if there is one, otherwise the phone's own radio. */
+const stale = () => {
+  const st = useStore.getState();
+  return st.telemetry ? isStale(st.telemetryAt, STALE_MS.telemetry) : isStale(st.phoneAt, STALE_MS.phone);
+};
+
+type Sample = { ts: number; v: number };
+const spread = (xs: Sample[]) => (xs.length ? Math.max(...xs.map((x) => x.v)) - Math.min(...xs.map((x) => x.v)) : 0);
+const mean = (xs: Sample[]) => xs.reduce((a, x) => a + x.v, 0) / (xs.length || 1);
+
+const MOVE_DB = 4; // a swing this big within MOVE_MS means the router/phone is being moved
+const MOVE_MS = 8_000;
+const SETTLE_DB = 1.2; // steady within this for SETTLE_MS = a position worth recording
+const SETTLE_MS = 6_000;
+const IDLE_MS = 90_000; // no movement for this long: an automatic session finishes by itself
+const COOLDOWN_MS = 5 * 60_000; // after you close it yourself, it stays out of the way for a while
 
 /** Fullscreen antenna-aiming view built around a giant SINR ring. */
 export function AimMode() {
   const aim = useStore((s) => s.aim);
   const setAim = useStore((s) => s.setAim);
-  const t = useStore((s) => s.telemetry);
+  const t = useStore((s) => s.telemetry ?? s.phone);
   const [tone, setTone] = useState(false);
+  const [auto, setAuto] = useState<boolean>(() => load<boolean>('autoAim', true));
+  const win = useRef<Sample[]>([]);
+  const autoOpened = useRef(false);
+  const cooldownUntil = useRef(0);
+  const lastMove = useRef(0);
+  const lastAuto = useRef<{ ts: number; sinr: number } | null>(null);
   const [best, setBest] = useState<number | null>(null);
   const [spots, setSpots] = useState<MarkedSpot[]>(() => load<MarkedSpot[]>('spots', []));
   const [label, setLabel] = useState('');
+  const spotsRef = useRef<MarkedSpot[]>(spots);
+  spotsRef.current = spots;
   const toneRef = useRef<PitchTone | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -46,7 +69,7 @@ export function AimMode() {
     const prev = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setAim(false);
+      if (e.key === 'Escape') closeByHand();
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -54,6 +77,90 @@ export function AimMode() {
       prev?.focus?.();
     };
   }, [aim, setAim]);
+
+  const closeByHand = () => {
+    cooldownUntil.current = Date.now() + COOLDOWN_MS;
+    autoOpened.current = false;
+    setAim(false);
+  };
+
+  const saveSpots = (next: MarkedSpot[]) => {
+    setSpots(next);
+    save('spots', next);
+  };
+
+  const bestOf = (list: MarkedSpot[]) =>
+    list.reduce<MarkedSpot | null>((b, x) => (isNum(x.sinr) && (!b || !isNum(b.sinr) || x.sinr > b.sinr) ? x : b), null);
+
+  // ---- automatic aiming: start when the signal is being moved, record steady positions, finish when it stops.
+  useEffect(() => {
+    const v = t?.sinr;
+    if (!isNum(v)) return;
+    const now = Date.now();
+    const w = win.current;
+    w.push({ ts: now, v });
+    while (w.length && now - w[0].ts > IDLE_MS + 5_000) w.shift();
+    if (!auto) return;
+    const within = (ms: number) => w.filter((x) => now - x.ts <= ms);
+
+    if (!aim) {
+      const recent = within(MOVE_MS);
+      if (recent.length >= 4 && spread(recent) >= MOVE_DB && now > cooldownUntil.current) {
+        autoOpened.current = true;
+        lastMove.current = now;
+        setAim(true);
+        toast('info', 'Aim mode started by itself', 'The signal is changing. Move slowly: PULSE records the steady spots and tells you the best one.', 7000);
+      }
+      return;
+    }
+
+    if (spread(within(MOVE_MS)) >= MOVE_DB / 2) lastMove.current = now;
+
+    // A steady reading = a position. Record it once, unless it is the same place again.
+    const settled = within(SETTLE_MS);
+    if (settled.length >= 5 && now - settled[0].ts >= SETTLE_MS - 1_000 && spread(settled) <= SETTLE_DB) {
+      const avg = mean(settled);
+      const la = lastAuto.current;
+      if (!la || Math.abs(avg - la.sinr) >= 1.5 || now - la.ts > 90_000) {
+        lastAuto.current = { ts: now, sinr: avg };
+        const list = spotsRef.current;
+        const spot: MarkedSpot = {
+          id: `${now}`,
+          label: `Spot ${list.length + 1}`,
+          ts: now,
+          sinr: Math.round(avg * 10) / 10,
+          rsrp: t?.rsrp ?? null,
+          rsrq: t?.rsrq ?? null,
+          pci: t?.pci ?? null,
+          cell_id: t?.cell_id ?? null,
+          band: t?.band ?? null,
+          place_id: usePlaces.getState().view?.current_place ?? null,
+          auto: true,
+        };
+        saveSpots([spot, ...list].slice(0, 40));
+        toast('ok', `Recorded ${spot.label}`, `SINR ${fmt(spot.sinr, 1)} dB, RSRP ${fmt(spot.rsrp)} dBm`, 3500);
+      }
+    }
+
+    // An automatic session ends by itself once nothing has moved for a while.
+    if (autoOpened.current && now - lastMove.current > IDLE_MS) {
+      autoOpened.current = false;
+      const best = bestOf(spotsRef.current);
+      setAim(false);
+      const advice =
+        best && isNum(best.sinr)
+          ? v < best.sinr - 2
+            ? `You are ${fmt(best.sinr - v, 1)} dB below it: move back there.`
+            : 'You are at (or close to) the best position.'
+          : '';
+      toast(
+        'ok',
+        'Aim finished',
+        best ? `Best position: ${best.label} (SINR ${fmt(best.sinr, 1)} dB). ${advice}` : 'No steady position was found. Try moving more slowly.',
+        10000,
+      );
+    }
+  }, [t, aim, auto]);
 
   useEffect(() => {
     if (tone) {
@@ -74,7 +181,8 @@ export function AimMode() {
   useTick(() => {
     const p = toneRef.current;
     if (!p) return;
-    const v = useStore.getState().telemetry?.sinr;
+    const st = useStore.getState();
+    const v = (st.telemetry ?? st.phone)?.sinr;
     p.set(isNum(v) ? norm(v, RANGES.sinr) : 0, stale() || !isNum(v));
   });
 
@@ -97,17 +205,32 @@ export function AimMode() {
       band: t?.band ?? null,
       place_id: usePlaces.getState().view?.current_place ?? null,
     };
-    const next = [spot, ...spots].slice(0, 40);
-    setSpots(next);
-    save('spots', next);
+    saveSpots([spot, ...spots].slice(0, 40));
     setLabel('');
     toast('ok', 'Spot marked', `${spot.label}: SINR ${fmt(spot.sinr, 1)} dB, RSRP ${fmt(spot.rsrp)} dBm`);
   };
   const remove = (id: string) => {
-    const next = spots.filter((s) => s.id !== id);
-    setSpots(next);
-    save('spots', next);
+    saveSpots(spots.filter((s) => s.id !== id));
   };
+
+  // Live coaching: is it getting better or worse, and how far is the best spot?
+  const nowMs = Date.now();
+  const recentW = win.current.filter((x) => nowMs - x.ts <= 3_000);
+  const beforeW = win.current.filter((x) => nowMs - x.ts > 3_000 && nowMs - x.ts <= 6_000);
+  const delta = recentW.length && beforeW.length ? mean(recentW) - mean(beforeW) : 0;
+  const trend =
+    delta > 0.8
+      ? { arrow: '▲', text: 'Getting better', cls: 'is-up' }
+      : delta < -0.8
+        ? { arrow: '▼', text: 'Getting worse', cls: 'is-down' }
+        : { arrow: '●', text: 'Holding steady', cls: 'is-flat' };
+  const bestNow = bestOf(spots);
+  const coach =
+    isNum(sinr) && bestNow && isNum(bestNow.sinr)
+      ? sinr >= bestNow.sinr - 0.5
+        ? `You are at your best position so far (${bestNow.label}).`
+        : `Best so far: ${bestNow.label} at ${fmt(bestNow.sinr, 1)} dB: ${fmt(bestNow.sinr - sinr, 1)} dB better than here.`
+      : 'Move slowly and pause for a few seconds at each position. PULSE records the steady ones for you.';
 
   return (
     <div className="aim" ref={rootRef} role="dialog" aria-modal="true" aria-label="Aim mode">
@@ -117,6 +240,16 @@ export function AimMode() {
           <h1 className="aim__title">Point for the best SINR</h1>
         </div>
         <div className="aim__tools">
+          <Switch
+            checked={auto}
+            onChange={(v) => {
+              setAuto(v);
+              save('autoAim', v);
+              if (!v) autoOpened.current = false;
+              toast('info', v ? 'Automatic aiming on' : 'Automatic aiming off', v ? 'It starts by itself when the signal changes and records steady spots.' : 'Aim mode will only open when you open it.');
+            }}
+            label="Auto"
+          />
           <Switch checked={tone} onChange={setTone} label="Tone" />
           <button
             type="button"
@@ -128,7 +261,7 @@ export function AimMode() {
           >
             Fullscreen
           </button>
-          <button ref={closeRef} type="button" className="btn" onClick={() => setAim(false)} aria-label="Close aim mode">
+          <button ref={closeRef} type="button" className="btn" onClick={closeByHand} aria-label="Close aim mode">
             <Icon name="close" size={18} /> Close
           </button>
         </div>
@@ -149,6 +282,12 @@ export function AimMode() {
           />
         </div>
         <div className="aim__side">
+          <div className={`aim__coach ${trend.cls}`} role="status" aria-live="polite">
+            <span className="aim__trend">
+              {trend.arrow} {trend.text}
+            </span>
+            <span className="aim__advice">{coach}</span>
+          </div>
           <div className="aim__stats">
             <div className="aim__stat">
               <span className="aim__k">Grade</span>
@@ -183,7 +322,7 @@ export function AimMode() {
             }}
           >
             <label className="field">
-              <span className="field__label">Label this position</span>
+              <span className="field__label">Name this position (optional: spots are recorded automatically)</span>
               <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. window, north wall, 2 m high" maxLength={60} />
             </label>
             <button type="submit" className="btn btn--accent" disabled={!isNum(sinr)}>
@@ -201,7 +340,10 @@ export function AimMode() {
                   .map((s) => (
                     <li key={s.id} className={`spot ${bestSpot?.id === s.id ? 'is-best' : ''}`}>
                       <div className="spot__main">
-                        <span className="spot__label">{s.label}</span>
+                        <span className="spot__label">
+                          {s.label}
+                          {s.auto ? <span className="spot__auto"> auto</span> : null}
+                        </span>
                         <span className="spot__meta muted small num">
                           {fmtTime(s.ts, false)} · PCI {fmt(s.pci)} · {bandLabel(s.band)}
                         </span>

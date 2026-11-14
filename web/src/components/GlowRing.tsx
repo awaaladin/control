@@ -5,8 +5,10 @@ import {
   GRADE_RGB,
   type Grade,
   isNum,
+  makeScorer,
   norm,
   prefersReducedMotion,
+  scoreRGB,
 } from '../lib/format';
 
 export interface GlowRingProps {
@@ -56,10 +58,14 @@ export function GlowRing({
   const gradeRef = useRef<HTMLSpanElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const { size: dims } = useCanvasSize(canvas);
-  const anim = useRef({ shown: NaN, color: NONE as RGB, dim: 0, phase: 0, text: '', grade: '' as string, frozenBreath: 1 });
+  const anim = useRef({ shown: NaN, color: NONE as RGB, dim: 0, phase: 0, text: '', grade: '' as string, frozenBreath: 1, css: '' });
 
   const target = isNum(value) ? value : NaN;
   const grade = gradeOf(value);
+  // Continuous colour: smooth green → yellow → orange → red by how good the reading is.
+  // No reading, no colour (neutral grey).
+  const scorer = makeScorer(gradeOf, range);
+  const score = isNum(value) ? scorer(value) : null;
 
   useTick((_now, dt) => {
     const c = canvas.current;
@@ -77,7 +83,7 @@ export function GlowRing({
     if (Number.isNaN(target)) a.shown = NaN;
     else if (Number.isNaN(a.shown)) a.shown = target;
     else a.shown += (target - a.shown) * k;
-    const gc = GRADE_RGB[grade] as RGB;
+    const gc = (score === null ? NONE : scoreRGB(score)) as RGB;
     a.color = mix(a.color, gc, reduce ? 1 : 1 - Math.exp(-dt * 4));
     a.dim += ((stale ? 1 : 0) - a.dim) * (reduce ? 1 : 1 - Math.exp(-dt * 3));
     if (!stale && !reduce) a.phase += dt;
@@ -94,7 +100,17 @@ export function GlowRing({
       gradeRef.current.textContent = gText;
       a.grade = gText;
     }
-    if (wrapRef.current) wrapRef.current.dataset.grade = stale ? 'stale' : grade;
+    if (wrapRef.current) {
+      // "Stale" only makes sense when there was a reading; with none the dial just says No data, in grey.
+      wrapRef.current.dataset.grade = stale && !Number.isNaN(a.shown) ? 'stale' : grade;
+      // The number's glow and the grade word follow the live colour (inline value beats the grade rule).
+      const css = Number.isNaN(a.shown) ? '' : `rgb(${a.color[0] | 0},${a.color[1] | 0},${a.color[2] | 0})`;
+      if (css !== a.css) {
+        if (css) wrapRef.current.style.setProperty('--gc', css);
+        else wrapRef.current.style.removeProperty('--gc');
+        a.css = css;
+      }
+    }
 
     // Draw.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -137,7 +153,7 @@ export function GlowRing({
     // Threshold markers.
     for (const th of thresholds) {
       const ang = START + SWEEP * norm(th, range);
-      const g = GRADE_RGB[gradeOf(th)] as RGB;
+      const g = scoreRGB(scorer(th)) as RGB;
       ctx.strokeStyle = rgba(g, 0.7 * alive);
       ctx.lineWidth = 2;
       const r1 = r - lw * 1.3;
