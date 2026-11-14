@@ -61,8 +61,9 @@ Root: HKCU; Subkey: "Software\Classes\pulse\shell\open\command"; ValueType: stri
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PULSE"; ValueData: """{sys}\wscript.exe"" ""{app}\launch.vbs"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-; Start the engine now (hidden).
-Filename: "{sys}\wscript.exe"; Parameters: """{app}\launch.vbs"" start"; WorkingDir: "{app}"; Flags: nowait runhidden
+; The engine is NOT started here: Setup can run [Run] entries before the settings file (.env) has been
+; written, and an engine that starts without it listens on every address and has no token. It is started
+; from [Code] (CurStepChanged, ssPostInstall) right after .env exists.
 ; Pairing link: the part after # never leaves the browser.
 Filename: "{code:PairUrl}"; Description: "Open PULSE in my browser and connect it to the engine"; Flags: shellexec postinstall skipifsilent nowait
 
@@ -140,6 +141,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   EnvFile: String;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -154,6 +156,10 @@ begin
         'RHCSD_BIND=127.0.0.1:7878' + #13#10 +
         'RHCSD_TOKEN=' + Token + #13#10, False);
     end;
+    { Start the engine now, hidden, and only now: the settings file must exist before it starts. }
+    Exec(ExpandConstant('{sys}\wscript.exe'),
+         '"' + ExpandConstant('{app}\launch.vbs') + '" start',
+         ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode);
   end;
 end;
 
