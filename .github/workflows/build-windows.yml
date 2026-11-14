@@ -1,0 +1,109 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when the engine, the website, the installer or this workflow change.
+    paths:
+      - "crates/**"
+      - "web/**"
+      - "installer/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+# A newer push cancels the build that is still running.
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # Needed to update the public download release below.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the engine (release)
+        run: cargo build --release -p rhcsd
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the PULSE website
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Find Inno Setup (install it if the runner lacks it)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after install" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Optional: skipped when the WINDOWS_CERT_* secrets are not set (see installer/sign.ps1).
+      - name: Sign the engine (optional)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: ./installer/sign.ps1 -Files target/release/rhcsd.exe
+
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          Write-Host "Version $ver"
+          & $env:ISCC "/DAppVersion=$ver" installer/pulse.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+      - name: Sign the installer (optional)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: ./installer/sign.ps1 -Files installer/Output/PULSE-Setup.exe
+
+      - name: Show the result
+        shell: pwsh
+        run: |
+          $f = Get-Item installer/Output/PULSE-Setup.exe
+          Write-Host ("{0} bytes" -f $f.Length)
+          Get-FileHash $f -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulse-windows
+          path: installer/Output/PULSE-Setup.exe
+
+      # The website's "Download the engine" button points at this release, so the link never
+      # changes and always serves the newest build. android-latest holds the "latest" flag.
+      - name: Publish installer to the download release
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete windows-latest --cleanup-tag --yes || true
+          gh release create windows-latest installer/Output/PULSE-Setup.exe \
+            --target "$GITHUB_SHA" \
+            --title "PULSE engine for Windows (latest)" \
+            --notes "Installer of commit ${GITHUB_SHA::7}. Run it and press Install. Unsigned builds make Windows SmartScreen warn: choose More info, then Run anyway." \
+            --latest=false

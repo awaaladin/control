@@ -4,6 +4,7 @@ import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl, setBackendT
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import { AppDownload } from './AppDownload';
+import { EnginePrompt } from './EnginePrompt';
 import { Icon } from './ui';
 
 export type Route = 'signal' | 'boost' | 'towers' | 'phone' | 'network' | 'audio' | 'control' | 'log';
@@ -201,7 +202,17 @@ export function ConfirmDialog() {
 }
 
 /** Shown when PULSE can't reach rhcsd: at startup, or when a live connection drops for more than a few seconds. */
+/** The connection card plus, when no engine is found anywhere, the "get the engine" prompt. */
 export function UnreachableOverlay({ onSettings }: { onSettings: () => void }) {
+  return (
+    <>
+      <ConnectionCard onSettings={onSettings} />
+      <EnginePrompt />
+    </>
+  );
+}
+
+function ConnectionCard({ onSettings }: { onSettings: () => void }) {
   const unreachable = useStore((s) => s.unreachable);
   const conn = useStore((s) => s.conn);
   const baseUrl = useStore((s) => s.baseUrl);

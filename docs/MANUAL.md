@@ -42,6 +42,28 @@ The bar at the top tells you whether you're seeing real data:
 
 PULSE never shows made-up data: if it can't reach your home system, it says so.
 
+### Getting the engine (Windows)
+
+PULSE needs its engine, `rhcsd`, a small program that talks to your router and devices and stays on your computer. If you open the PULSE website and no engine is found anywhere, a card in the corner offers to download it. Nothing downloads until you click. "Not now" hides the card for 7 days. On an Android browser the card points to the app (the engine is inside it). macOS and Linux packages are not available yet.
+
+On Windows:
+
+1. Click **Download the engine**. The file is `PULSE-Setup.exe` (also at `https://github.com/awaaladin/control/releases/download/windows-latest/PULSE-Setup.exe`).
+2. Open it. The installer is not signed yet, so Windows SmartScreen may say "Windows protected your PC": click **More info**, then **Run anyway**. (A signed installer needs a code-signing certificate from a certificate authority; that is not set up yet.)
+3. Accept the licence page, pick a folder (the default is inside your user profile; you can choose another drive such as `D:`), keep or untick **Start PULSE when I sign in**, press **Install**.
+4. At the end, leave **Open PULSE in my browser and connect it to the engine** ticked. The page opens already paired with the engine. If you skip it, the PULSE page in your browser finds the engine by itself within a few seconds.
+
+Stop and start it from the **Control** page, card **Engine**: it shows whether the engine runs, where, its version and how long it has been up. **Stop engine** asks for confirmation, then shuts the engine down (PULSE then shows "connection interrupted"). **Start engine** appears afterwards; your browser asks once whether it may open "PULSE", allow it. There is also a Start menu folder "PULSE" with Start and Stop shortcuts. If the card says the engine is too old, run the newest installer over it; your settings and token are kept.
+
+What the installer changes (only for your Windows user, no administrator needed):
+
+- files in the install folder: `rhcsd.exe`, the website in `web\dist`, `LICENSE`, `launch.vbs`, `stop.cmd`, your settings in `.env` (it holds a random access token created on your computer), a log `rhcsd.log` (kept under about 1 MB) and later your `data` folder;
+- the engine listens on this computer only (`127.0.0.1:7878`), so other devices on your network cannot reach it. To open it up, edit `RHCSD_BIND` in `.env`;
+- registry entries under your user only: the `pulse:` link, and (if ticked) a start-at-sign-in entry;
+- a Start menu folder "PULSE".
+
+To remove it: Settings, Apps, **PULSE engine**, Uninstall. This stops the engine and deletes the files (including `.env` and `data`), the registry entries and the shortcuts.
+
 ### Stopping
 Press **Ctrl+C** in the service window. Stopping never changes anything on the
 router or phone.
@@ -337,6 +359,34 @@ the token they see only the static dashboard page and `{ok, version}`.
 **Never port-forward 7878** on your router. That makes `rhcsd` visible to every scanner on the internet over plain http, with the token sent unencrypted. Tunnels give you https and a token check.
 
 ---
+
+### 3.2 PULSE on any phone (no laptop, no router, no Termux)
+
+The Android app carries its own copy of the PULSE engine. Install it on any 64-bit Android phone (yours, a relative's) and it reads **that phone's own** mobile signal and tower, with nothing else needed.
+
+**First start.** The app asks, in plain words, whether it may run a small engine on the phone. *Start* turns it on; *Not now* leaves it off (the finder and remote features still work, and you can turn the engine on later with the switch in the finder). Then Android asks for the permissions below.
+
+**What it shows.**
+- *Signal*: the phone's RSRP / SINR / RSRQ rings and live charts, the operator, the network type (LTE, 5G, ...) and the SIM used for mobile data.
+- *Phone*: battery, the serving cell (tower, sector, band), operator, network type, SIM.
+- *Towers*: **Cells around you**, the cell you are on plus the other cells the phone can hear, each with a signal bar, band and, once looked up, which way and how far its tower is. If a clearly stronger cell is nearby it says so, e.g. "A stronger cell is nearby: tower X sector Y on band Z, about N dB stronger than the cell you are on, about D m to the north-east."
+- No router panels, no router errors: with no router set up they are simply hidden.
+
+**Permissions and why.**
+| Permission | Why |
+|---|---|
+| Location (precise) | Android only shows cell and tower data to apps that may see your location; the position is also used for tower distance and direction |
+| Phone | the network type and which SIM carries mobile data |
+| Notifications | the engine runs in the background with a notification that has a **Stop** button |
+
+**Stopping it.** Press *Stop* on the notification, use the switch in the finder, or the engine's Stop control inside PULSE. It then shows "Stopped by you" and a *Start* button; it does not restart by itself.
+
+**Privacy.** Readings stay on the phone. The only thing that leaves is a tower look-up: a cell's network codes and ID (never your position) are sent to the public tower databases beaconDB, and OpenCellID if you typed a key in the finder, so the tower can be placed on the map.
+
+**What it cannot do.**
+- It cannot force a phone onto another tower or band. Android and the carrier decide that. PULSE can show you a stronger cell; moving (near a window, higher up, outdoors) is what lets the phone change to it.
+- It needs a 64-bit (arm64) phone. On a 32-bit phone the app says so and you can still open another PULSE system with Find / Scan.
+- Some phones hide the identity of neighbouring cells; those show a signal but no tower position.
 
 ## 4. When something goes wrong
 

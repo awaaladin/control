@@ -1,0 +1,23 @@
+PULSE / rhcs is dual-licensed.
+
+1. Open source: GNU Affero General Public License v3 (the next page, and the
+   LICENSE file installed with the program). You may use, study, modify and
+   share it. If you run a modified version for others over a network, you must
+   publish your source under the same licence.
+
+2. Commercial licence: if you want to build rhcs into a closed-source product
+   or service without the AGPL obligations, a commercial licence is available.
+   Open an issue titled "Commercial license" at
+   https://github.com/awaaladin/control or contact the maintainer through GitHub.
+
+What this installer does on your computer:
+ - copies the engine (rhcsd.exe), the PULSE website files and a few small
+   scripts into the folder you choose (default: your user profile, no
+   administrator rights needed);
+ - creates a private access token and a settings file (.env) in that folder;
+   the engine listens on this computer only (127.0.0.1:7878);
+ - registers the pulse: link (so a web page can ask your computer to START
+   the engine, and nothing else), and, if you leave the option ticked, starts
+   the engine when you sign in. Both are for your Windows user only.
+
+Uninstalling (Settings > Apps > PULSE) stops the engine and removes all of it.

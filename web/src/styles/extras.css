@@ -448,3 +448,22 @@
 }
 .unreach__x:hover { background: rgba(255, 255, 255, 0.14); }
 .unreach__title { padding-right: 46px; }
+
+/* ------------------------------------------------------------------ "get the engine" prompt and Engine card */
+.engine-prompt {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  width: min(380px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.engine-prompt__title { margin: 2px 0 8px; font-size: 18px; }
+.engine-prompt__main { display: flex; justify-content: center; margin: 12px 0; text-decoration: none; }
+.engine-prompt__steps { margin: 0 0 10px; padding-left: 20px; font-size: 13px; line-height: 1.5; }
+.engine-prompt__wait { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.engine-prompt__small, .engine-card__small { font-size: 12px; margin: 8px 0 0; }
+.engine-prompt__foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+.engine-card .actions { margin-top: 10px; }

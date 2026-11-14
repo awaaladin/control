@@ -420,6 +420,65 @@ the home location and is git-ignored.
 
 ---
 
+#### App mode (`RHCSD_APP=1`): rhcsd inside the Android app
+
+The Android app runs `rhcsd` as a child process (`librhcsd.so`) and feeds it the phone's own readings. Settings are environment variables only:
+
+| Variable | Meaning |
+|---|---|
+| `RHCSD_APP=1` | app mode: no ADB, no Termux, no router polling unless `ROUTER_IP` is set; bind defaults to `127.0.0.1:7878` |
+| `RHCSD_BIND` | listen address |
+| `RHCSD_WEB_DIR` | folder with PULSE's `index.html` (the app unpacks its bundled copy there) |
+| `RHCSD_DATA_DIR` | writable folder for `towers.json`, `places.json`, `switch.json` (also usable outside app mode) |
+| `RHCSD_TOKEN` | required, 20+ characters; the app makes a random one per install |
+| `TOWER_LOOKUP` | `on` (rhcsd uses curl), `external` (the app looks cells up; default and forced in app mode), `off` |
+| `RHCSD_ALLOWED_ORIGINS` | extra browser origins allowed to call the API (comma separated); always allowed: `https://rhcs-pulse.vercel.app`, `localhost` and `127.0.0.1` pages |
+
+**Auth in app mode.** Other apps on the phone can reach loopback, so every `/api/*` and `/ws` call needs the token (`x-rhcs-token`, `Authorization: Bearer`, or `?token=` for the WebSocket), even from loopback with no proxy headers. Static files stay open; `/api/health` answers only `{ok, version, auth_required}` until the token is shown. Wrong tokens from loopback are not locked out (a hostile app could otherwise lock the real client out).
+
+`/api/health` adds `app_mode` and `sources.router_configured` (false = hide router-only UI).
+
+**Push endpoints** (token required; `409` outside app mode, `400` with a message for out-of-range values):
+- `POST /api/phone/push`: the `PhoneStatus` shape (`model, android, battery_level, battery_temp_c, charging, usb_powered, rsrp, rsrq, sinr, rssi, pci, cell_id, tac, earfcn, band, mcc, mnc`) plus `operator`, `network_type`, `sim_slot`, `rat` and `neighbors: [{ci, pci, tac, earfcn, band, mcc, mnc, rsrp, rsrq, sinr, rat}]` (at most 32 kept). It replaces the phone source, is broadcast as the usual `phone` WebSocket message, and the source goes offline after 15 s without a push.
+- `POST /api/location/push`: `{lat, lon, accuracy_m, ts, source}`; becomes the current position (tower distance and direction, automatic places). Offline after 120 s without a push.
+
+**External tower lookups.**
+- `GET /api/towers/lookups` -> `{external, lookups: [{mcc, mnc, tac, cell_id, radio}]}` (up to 8 cells that need a position).
+- `POST /api/towers/location` with `{mcc, mnc, tac, cell_id, lat, lon, accuracy_m, source}`, or `{..., found: false}`, or `{..., error: "text"}` (retried in 10 minutes; not-found is retried weekly). Only cells rhcsd has seen are accepted.
+
+**Towers additions.** `GET /api/towers` also returns `around` (`{ts, age_s, cells: [...]}`: the serving cell first, then neighbours by strength, each with `rsrp/rsrq/sinr`, `band`, `mhz`, `location`, `distance_m`, `compass`) and `recommendation` (`status` `better` | `best` | `unknown` | `stale`, `message`, `delta_db`, ...). A cell is "better" when its RSRP is at least 6 dB above the serving cell's, it is the same technology and not much noisier (SINR within 3 dB). `can_force` is always `false`: a phone cannot be pushed onto another cell. Neighbours that reveal their identity are also rows of `cells` (with `nearby` = last measured signal, `seen_by: ["phone"]`, `serving: []`).
+
+**Engine control (all modes).**
+- `GET /api/engine` -> `{running, mode: "app"|"windows"|"termux"|"other", version, uptime_s, can_stop}`.
+- `POST /api/engine/stop` (write auth) -> `{ok, message: "Engine is stopping"}`; the process exits with code 0 about 500 ms later. The Android service reads exit code 0 as "stopped by the user" and does not restart it.
+
+**CORS.** Browsers may read the API only from the allowed origins above; other websites get no CORS headers. Requests without an `Origin` header (same-origin pages, curl, the app) are unaffected, and the token rules still apply.
+
+### 5.4 The Windows installer and the engine API
+
+**Installer** (`installer/`, built by `.github/workflows/build-windows.yml` on `windows-latest`): the workflow builds `rhcsd` (release) and `web/dist`, compiles `installer/pulse.iss` with Inno Setup into `PULSE-Setup.exe`, uploads it as artifact `pulse-windows` and, on main, republishes it to the rolling release tag `windows-latest` (created with `--latest=false`, because `android-latest` holds the "latest" flag). Fixed URL: `https://github.com/awaaladin/control/releases/download/windows-latest/PULSE-Setup.exe`. Code signing is optional: add repository secrets `WINDOWS_CERT_PFX_BASE64` and `WINDOWS_CERT_PASSWORD` and `installer/sign.ps1` signs `rhcsd.exe` and the installer; without them the step is skipped and SmartScreen warns. Windows only; macOS and Linux packages are out of scope for now.
+
+**Layout of an install** (per user, no admin; default `%LOCALAPPDATA%\PULSE`, the folder page allows another drive):
+
+```
+rhcsd.exe        the engine
+.env             RHCSD_BIND=127.0.0.1:7878 and a random RHCSD_TOKEN (48 hex chars, made at install time; kept on upgrade)
+web\dist\       the PULSE site (rhcsd serves web/dist found relative to the folder that holds .env)
+launch.vbs       starts rhcsd hidden, logs to rhcsd.log (rotated past 1 MB), does nothing if this install's rhcsd already runs
+stop.cmd         stops this install's rhcsd.exe
+LICENSE
+```
+
+**The `pulse:` protocol**: `HKCU\Software\Classes\pulse` runs `wscript.exe "<app>\launch.vbs" "%1"`. `launch.vbs` accepts only an allow-list (no argument, `start`, `pulse:start`, `pulse://start`, with an optional trailing slash) and quits on anything else; the argument is never used as a path or command. Autostart is `HKCU\...\Run\PULSE` (optional task). The final page of setup opens `https://rhcs-pulse.vercel.app/#hub=http%3A%2F%2F127.0.0.1%3A7878&token=<token>`, a normal pairing link (the fragment is not sent to any server). Uninstall runs `stop.cmd`, then removes files, registry values and shortcuts.
+
+**Engine API** (implemented in rhcsd; the site handles "not available" with a plain message):
+
+- `GET /api/engine` returns `{ "running", "mode": "app"|"windows"|"termux"|"other", "version", "uptime_s", "can_stop" }`.
+- `POST /api/engine/stop` returns `{ "ok", "message" }`, then the engine exits cleanly. Normal token rules apply.
+- Starting is not an API (the engine is not running): on Windows it is the `pulse://start` link; in the Android app it is the app's Start button.
+
+**Website side**: `web/src/lib/engine.ts` (URL, OS detection, `getEngine`, `stopEngine`), `components/EnginePrompt.tsx` (the first-run card, mounted next to the connection card in `Shell.tsx`, shown only when no backend answers and not inside the app; "Not now" is stored in `localStorage` key `pulse.engineSnooze` for 7 days; it relies on the existing auto-search, with no polling of its own) and `components/EngineCard.tsx` (Control page).
+
 ## 6. Network setups that work
 
 The laptop can be on several networks at once. Windows sends internet traffic
