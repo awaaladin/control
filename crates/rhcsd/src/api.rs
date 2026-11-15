@@ -76,6 +76,7 @@ pub fn router(s: Shared) -> Router {
         .route("/api/router/action", post(router_action))
         .route("/api/settings", get(get_settings).post(set_settings))
         .route("/ws", get(ws))
+        .route("/api/{*rest}", axum::routing::any(api_not_found))
         .merge(crate::boost::routes())
         .merge(crate::towers::routes())
         .merge(crate::places::routes())
@@ -98,6 +99,11 @@ pub fn router(s: Shared) -> Router {
 
 pub(crate) fn authorized(s: &Shared, addr: SocketAddr, headers: &HeaderMap) -> bool {
     crate::auth::check_write(s, addr, headers)
+}
+
+/// Unknown /api paths answer with JSON, never with the dashboard page.
+async fn api_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({ "ok": false, "message": "no such API endpoint" }))).into_response()
 }
 
 pub(crate) fn denied() -> Response {
