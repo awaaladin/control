@@ -109,6 +109,33 @@ export function startEngineLink(): void {
   window.location.href = START_LINK;
 }
 
+// Remembers that the engine has been installed or connected on this computer, so the page can offer
+// "Run PULSE" (not a download) the next time it finds the engine stopped.
+const SEEN_KEY = 'pulse.engineSeen';
+export function engineSeen(): boolean {
+  try {
+    return localStorage.getItem(SEEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+export function markEngineSeen(): void {
+  try {
+    localStorage.setItem(SEEN_KEY, '1');
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Starts the engine without leaving the page (a hidden frame opens the pulse: link). */
+export function startEngineQuietly(): void {
+  const f = document.createElement('iframe');
+  f.style.display = 'none';
+  f.src = START_LINK;
+  document.body.appendChild(f);
+  window.setTimeout(() => f.remove(), 5000);
+}
+
 // "Not now" is remembered for 7 days.
 const SNOOZE_KEY = 'pulse.engineSnooze';
 export function snoozed(): boolean {
