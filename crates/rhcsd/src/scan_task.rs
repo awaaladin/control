@@ -21,6 +21,10 @@ pub async fn run(s: Shared) {
     let mut first = true;
 
     loop {
+        // Game Boost for the PC is on: no scans (they add traffic) until it is restored.
+        while crate::devboost::scans_paused() {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
         let gateways: Vec<Ipv4Addr> = s.cfg.router_ip.parse().into_iter().collect();
         let targets = scan::targets(&gateways, &s.cfg.scan_cidrs);
         let networks: Vec<String> = targets.iter().map(|t| t.subnet.to_string()).collect();

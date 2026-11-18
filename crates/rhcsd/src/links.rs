@@ -40,6 +40,8 @@ pub struct Adapter {
     pub metric: Option<u32>,
     pub addrs: Vec<Ipv4Addr>,
     pub gateways: Vec<Ipv4Addr>,
+    /// Negotiated link speed in Mbit/s (the slower of send and receive), when the OS knows it.
+    pub speed_mbps: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -152,6 +154,23 @@ pub fn classify(adapters: &[Adapter], h: &Hints) -> Vec<Link> {
     out
 }
 
+/// Windows reports link speed in bit/s per direction; u64::MAX (or 0) means "unknown".
+/// Returns Mbit/s of the slower known direction.
+pub fn link_speed_mbps(tx_bps: u64, rx_bps: u64) -> Option<f64> {
+    let known = |v: u64| (v != 0 && v != u64::MAX).then_some(v);
+    let v = match (known(tx_bps), known(rx_bps)) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) | (None, Some(a)) => a,
+        (None, None) => return None,
+    };
+    Some(v as f64 / 1e6)
+}
+
+/// Link speed (Mbit/s) by interface index, for the signal readings of wired and USB links.
+pub fn adapter_speeds() -> Vec<(u32, f64)> {
+    adapters().into_iter().filter_map(|a| a.speed_mbps.map(|s| (a.if_index, s))).collect()
+}
+
 /// Adapters as reported by the OS.
 #[cfg(windows)]
 pub fn adapters() -> Vec<Adapter> {
@@ -229,6 +248,7 @@ pub fn adapters() -> Vec<Adapter> {
                 metric: (a.Ipv4Metric != 0).then_some(a.Ipv4Metric),
                 addrs,
                 gateways,
+                speed_mbps: link_speed_mbps(a.TransmitLinkSpeed, a.ReceiveLinkSpeed),
             });
             p = a.Next;
         }
@@ -251,6 +271,7 @@ pub fn adapters() -> Vec<Adapter> {
         metric: None,
         addrs: vec![ip],
         gateways: netscan::net::default_gateway().into_iter().collect(),
+        speed_mbps: None,
     }]
 }
 
@@ -265,6 +286,25 @@ pub struct WlanIf {
     pub state: Option<String>,
     /// Windows' signal quality, 0-100 %.
     pub signal_pct: Option<u8>,
+    /// Access point address. Parsed for completeness; never shown or sent anywhere.
+    pub bssid: Option<String>,
+    /// "802.11n", "802.11ac", "802.11ax" ...
+    pub radio_type: Option<String>,
+    pub channel: Option<u32>,
+    /// "2.4 GHz" / "5 GHz" / "6 GHz": from the Band line (newer Windows) or derived from the channel.
+    pub band: Option<String>,
+    pub rx_mbps: Option<f64>,
+    pub tx_mbps: Option<f64>,
+}
+
+/// Wi-Fi band from a channel number alone (2.4 GHz uses 1-14, 5 GHz 32-177). 6 GHz channels
+/// overlap the numbers of 5 GHz, so they are only known from the Band line.
+pub fn band_from_channel(ch: u32) -> Option<&'static str> {
+    match ch {
+        1..=14 => Some("2.4 GHz"),
+        32..=177 => Some("5 GHz"),
+        _ => None,
+    }
 }
 
 /// Parses `netsh wlan show interfaces` (English Windows). Keys are matched
@@ -283,28 +323,61 @@ pub fn parse_netsh_wlan(text: &str) -> Vec<WlanIf> {
             "SSID" => w.ssid = Some(v.to_string()).filter(|s| !s.is_empty()),
             "State" => w.state = Some(v.to_string()),
             "Signal" => w.signal_pct = v.trim_end_matches('%').trim().parse().ok(),
+            "BSSID" => w.bssid = Some(v.to_string()).filter(|s| !s.is_empty()),
+            "Radio type" => w.radio_type = Some(v.to_string()).filter(|s| !s.is_empty()),
+            "Channel" => w.channel = v.parse().ok(),
+            "Band" => w.band = Some(v.to_string()).filter(|s| !s.is_empty()),
+            "Receive rate (Mbps)" => w.rx_mbps = v.parse().ok(),
+            "Transmit rate (Mbps)" => w.tx_mbps = v.parse().ok(),
             _ => {}
         }
     }
     for w in out.iter_mut() {
         if w.state.as_deref().is_some_and(|s| !s.eq_ignore_ascii_case("connected")) {
             w.ssid = None;
+            w.signal_pct = None;
+            w.bssid = None;
+            w.radio_type = None;
+            w.channel = None;
+            w.band = None;
+            w.rx_mbps = None;
+            w.tx_mbps = None;
+        }
+        if w.band.is_none() {
+            w.band = w.channel.and_then(band_from_channel).map(str::to_string);
         }
     }
     out
 }
 
+/// Cached `netsh wlan show interfaces` result: requests never spawn netsh more than once per
+/// [`WLAN_CACHE_TTL`], however often the page polls.
+#[cfg(windows)]
+static WLAN_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<WlanIf>)>> = std::sync::Mutex::new(None);
+pub const WLAN_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Wireless interfaces right now (Windows only; empty elsewhere or on error).
+/// The `netsh` parser reads English output only; on another Windows language the
+/// labels differ and the Wi-Fi readings stay empty rather than wrong.
 pub async fn wlan_interfaces() -> Vec<WlanIf> {
     #[cfg(windows)]
     {
+        if let Some((at, v)) = WLAN_CACHE.lock().ok().and_then(|g| g.clone()) {
+            if at.elapsed() < WLAN_CACHE_TTL {
+                return v;
+            }
+        }
         let mut cmd = tokio::process::Command::new("netsh");
         cmd.args(["wlan", "show", "interfaces"]).kill_on_drop(true);
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
+        let v = match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
             Ok(Ok(out)) if out.status.success() => parse_netsh_wlan(&String::from_utf8_lossy(&out.stdout)),
             _ => Vec::new(),
+        };
+        if let Ok(mut g) = WLAN_CACHE.lock() {
+            *g = Some((std::time::Instant::now(), v.clone()));
         }
+        v
     }
     #[cfg(not(windows))]
     {
@@ -371,6 +444,7 @@ mod tests {
             metric: Some(25),
             addrs: vec![ip.parse().unwrap()],
             gateways: gw.map(|g| g.parse().unwrap()).into_iter().collect(),
+            speed_mbps: None,
         }
     }
 
@@ -464,5 +538,34 @@ mod tests {
         assert_eq!(w[1].name, "WiFi 2");
         assert_eq!(w[1].ssid, None);
         assert!(parse_netsh_wlan("The Wireless AutoConfig Service (wlansvc) is not running.").is_empty());
+    }
+
+    #[test]
+    fn parses_full_netsh_sample() {
+        // Made-up SSID / BSSID; the layout is what Windows 10 prints.
+        let text = "There is 1 interface on the system: \r\n\r\n    Name                   : WiFi\r\n    State                  : connected\r\n    SSID                   : Example Net\r\n    BSSID                  : 02:00:00:00:00:09\r\n    Network type           : Infrastructure\r\n    Radio type             : 802.11ac\r\n    Authentication         : WPA2-Personal\r\n    Channel                : 44\r\n    Receive rate (Mbps)    : 433.3\r\n    Transmit rate (Mbps)   : 390\r\n    Signal                 : 82% \r\n";
+        let w = &parse_netsh_wlan(text)[0];
+        assert_eq!(w.ssid.as_deref(), Some("Example Net"));
+        assert_eq!(w.bssid.as_deref(), Some("02:00:00:00:00:09"));
+        assert_eq!(w.radio_type.as_deref(), Some("802.11ac"));
+        assert_eq!((w.channel, w.signal_pct), (Some(44), Some(82)));
+        assert_eq!(w.band.as_deref(), Some("5 GHz"), "derived from the channel");
+        assert_eq!((w.rx_mbps, w.tx_mbps), (Some(433.3), Some(390.0)));
+        // The Band line (newer Windows) wins over the derivation.
+        let t6 = text.replace("    Channel                : 44", "    Band                   : 6 GHz\r\n    Channel                : 5");
+        assert_eq!(parse_netsh_wlan(&t6)[0].band.as_deref(), Some("6 GHz"));
+        // A disconnected interface carries no stale readings.
+        let off = "    Name                   : WiFi\r\n    State                  : disconnected\r\n    Signal                 : 50%\r\n";
+        let w = &parse_netsh_wlan(off)[0];
+        assert!(w.signal_pct.is_none() && w.ssid.is_none() && w.band.is_none());
+    }
+
+    #[test]
+    fn link_speed_conversion() {
+        assert_eq!(link_speed_mbps(1_000_000_000, 1_000_000_000), Some(1000.0));
+        assert_eq!(link_speed_mbps(100_000_000, 1_000_000_000), Some(100.0));
+        assert_eq!(link_speed_mbps(u64::MAX, 54_000_000), Some(54.0));
+        assert_eq!(link_speed_mbps(u64::MAX, u64::MAX), None);
+        assert_eq!(link_speed_mbps(0, 0), None);
     }
 }

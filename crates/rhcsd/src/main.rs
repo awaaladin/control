@@ -5,8 +5,10 @@
 
 mod api;
 mod auth;
+mod bluetooth;
 mod boost;
 mod connections;
+mod devboost;
 mod links;
 mod location;
 mod phone;
@@ -17,6 +19,7 @@ mod scan_task;
 mod state;
 mod switch;
 mod towers;
+mod winps;
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -42,6 +45,7 @@ async fn main() -> Result<()> {
         tokio::spawn(phone::run(s.clone()));
         tokio::spawn(location::run(s.clone()));
     }
+    tokio::spawn(devboost::startup(s.clone()));
     tokio::spawn(scan_task::run(s.clone()));
     tokio::spawn(towers::run(s.clone()));
     tokio::spawn(towers::geolocate(s.clone()));
@@ -95,6 +99,7 @@ async fn main() -> Result<()> {
                     _ = s.shutdown.notified() => {}
                 }
                 println!("shutting down");
+                devboost::shutdown_restore(&s).await;
             }
         })
         .await?;

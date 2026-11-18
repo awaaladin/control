@@ -107,6 +107,29 @@ What the numbers mean:
 | SINR (cleanliness, dB) | 20 or higher | 13 to 20 | 0 to 13 | below 0 |
 | RSRQ (quality, dB) | −10 or higher | −10 to −15 | −15 to −20 | below −20 |
 
+#### Signal for any connection
+
+The three dials above are the 4G radio. Every connection the PC uses now also has its own
+readings, so there is something to look at whatever you are connected through:
+
+| Connection | Readings | Good / bad |
+|---|---|---|
+| **Wi-Fi** | Wi-Fi signal (dBm), Wi-Fi quality (%), link speed (Mbit/s); the line under the dials gives the network name, standard (802.11n/ac/ax), channel, band (2.4 / 5 GHz) and receive / transmit rate | signal: -50 or higher excellent, -60 good, -70 fair, below that poor. Quality is Windows' own 0-100 % (dBm = quality / 2 - 100). Speed: 200 / 100 / 40 Mbit/s |
+| **Cable (Ethernet)** | Link speed (Mbit/s) | 1000 / 100 / 10 Mbit/s |
+| **Phone over USB tethering** | Link speed of the USB link, then the phone's own mobile signal (Phone RSRP / SINR / RSRQ), labelled as the phone's | speed as for a cable; mobile signal as in the table above |
+| **Phone hotspot (Wi-Fi)** | This PC's Wi-Fi signal to the phone, then the phone's mobile signal | as above |
+| **4G router** | RSRP / SINR / RSRQ of the router, then this PC's Wi-Fi or cable readings | as above |
+| **Bluetooth** | Connected devices are listed by name. **No signal strength**: Windows does not report one for a connected Bluetooth device, so none is shown. | n/a |
+
+A dial with no reading is grey, never coloured. The colour runs continuously green, yellow,
+orange, red like the other dials, and a small line under each dial remembers the last minutes
+while the page is open.
+
+Limits: the Wi-Fi readings read the English output of Windows' `netsh`, so on a Windows in
+another language they stay grey rather than wrong. The speed is what the adapter negotiated,
+not a speed test. The Bluetooth list takes a few seconds the first time and is refreshed every
+30 seconds in the background.
+
 ### 2.2 Aim mode: find the best spot for the router
 Press **Aim mode** on the Signal page.
 1. One giant ring shows **SINR**, the value that matters most for speed.
@@ -243,6 +266,53 @@ Also on the page:
 |---|---|
 | **Tips for lower ping** | What else helps: Aim mode for the router, pausing heavy users (with a count of other devices on your networks), USB over hotspot, phone temperature |
 | **Best time of day** | Average router SINR per hour of the day, best hours highlighted. Built from the last 24 h rhcsd has been running (it isn't saved when rhcsd stops) |
+
+#### Boost this PC for gaming
+
+Under the link cards on the Boost page. **No software can make your radio signal stronger.**
+This frees your PC from background load, raises the game's priority and picks the best link,
+and PULSE shows the measured ping before and after.
+
+How to use it: open the game (or the emulator that runs it, for example BlueStacks, LDPlayer,
+MSI App Player, Gameloop or MEmu), pick it in the list, tick what you want changed, press
+**Boost now**. A box lists exactly what will change; nothing happens until you confirm. PULSE
+first measures your ping (a few seconds), then applies the changes, and about 10 seconds later
+measures again. **Restore everything** puts it all back at once.
+
+| Action | What it does | Put back by | Needs administrator |
+|---|---|---|---|
+| High performance power plan | Windows power plan switched to High performance (uses more power, runs warmer) | switching back to the plan that was active | no |
+| Windows Game Mode | Per-user Game Mode setting turned on | the old value (or removed again if it was not set) | no |
+| Raise the game's priority | The game you picked gets CPU priority High | its old priority | no |
+| Lower the priority of programs you pick | Programs you tick get Below normal. Nothing is closed | their old priorities | no |
+| Quiet notifications | App pop-up notifications off for your account | the old value | no |
+| Pause PULSE's own scans | PULSE's LAN scans and auto-switch wait while the boost is on | they resume | no |
+| Wi-Fi adapter: maximum performance | Wi-Fi power saving set to Maximum Performance on the active power plan (best effort: some adapters ignore it) | the old values | no |
+| Use the best connection | The link with the best measured ping becomes the one Windows uses for new connections (the same switch as "Switch now" above) | "Restore automatic" of that switch | yes |
+| Mark the game's traffic (DSCP 46) | A temporary QoS policy tags the game's packets. Helps only if your router honours the tag (many do not), so it is off by default | the policy is removed (it also vanishes at reboot) | yes |
+| Clear the DNS cache | Empties Windows' cache of website addresses. Harmless | cannot be undone (Windows refills it) | no |
+
+What it never does: close a program, stop a service, touch Defender or Windows Update, or write
+outside your own user settings. There is no "RAM cleaner".
+
+When things are put back: when you press **Restore everything**, when the game closes (PULSE
+notices by itself), when rhcsd is closed normally, and, if rhcsd or the PC ever dies in the
+middle, the next time rhcsd starts: every change is written to `devboost.json` in the data
+folder *before* it is made, with the value it replaces.
+
+The result card says what was measured, for example "Ping went from 80 ms to 55 ms", or, if
+the change is within normal run-to-run noise (about 3 ms or 10 % of ping, 2 ms of jitter, 1
+point of loss), **"No measurable change: your game was limited by the connection, not the
+PC."** Numbers are real connection tests to public servers, not the game's own server, and no
+percentages are invented. If the ping looks worse after, say so: run it again before drawing a
+conclusion.
+
+Honest limits: if the game is slow because the mobile signal is weak or the network is busy,
+none of this changes that; the result card will say so. A game running as administrator cannot
+have its priority changed unless rhcsd is also started as administrator (PULSE then reports that
+program as failed and carries on). The window list shows names and memory of programs with a
+window; window titles are shown only for programs that look like games or emulators.
+On Android there is nothing to apply: an app cannot change how another app performs.
 
 ### 2.9 Towers: where your signal comes from
 Every cell (tower antenna) the router or the phone has used is recorded, with

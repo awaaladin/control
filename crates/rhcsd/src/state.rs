@@ -238,6 +238,8 @@ pub struct AppState {
     pub places: crate::places::Places,
     /// Interface metrics changed by switching, for an exact restore (see switch.rs).
     pub switch: crate::switch::Switcher,
+    /// Game Boost for the PC: reversible changes and their journal (see devboost.rs).
+    pub devboost: crate::devboost::Devboost,
     /// rhcsd runs elevated (Windows administrator): switching links is possible.
     pub admin: bool,
     /// Wi-Fi names seen as the phone's hotspot this session.
@@ -255,6 +257,7 @@ impl AppState {
         let towers = crate::towers::Towers::open(&cfg);
         let places = crate::places::Places::open(&cfg.data_dir);
         let switch = crate::switch::Switcher::open(&cfg.data_dir);
+        let cfg_data_dir = cfg.data_dir.clone();
         Arc::new(Self {
             cfg,
             started: Instant::now(),
@@ -277,6 +280,7 @@ impl AppState {
             location: RwLock::new(None),
             places,
             switch,
+            devboost: crate::devboost::Devboost::open(&cfg_data_dir),
             admin: crate::switch::is_elevated(),
             learned_hotspot_ssids: RwLock::new(Vec::new()),
         })

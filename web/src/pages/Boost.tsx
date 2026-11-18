@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { DeviceBoost } from '../components/DeviceBoost';
 import { GlowRing } from '../components/GlowRing';
 import { Badge, Empty, Icon, KV, Panel, Switch } from '../components/ui';
 import {
@@ -250,9 +251,7 @@ function SwitchPanel({ st }: { st: BoostState }) {
             <li>In rhcsd's window press <strong>Ctrl+C</strong> to stop it.</li>
             <li>Start menu → type <strong>PowerShell</strong> → right-click <strong>Windows PowerShell</strong> → <strong>Run as administrator</strong>.</li>
             <li>
-              Run <code>cd D:\setup
               Run <code>{'cd D:\\setup\\rhcs'}</code> then <code>{'.\\target\\debug\\rhcsd.exe'}</code>
-hcsd.exe</code>
             </li>
             <li>Reload this page: the switch and the "Switch now" buttons turn on.</li>
           </ol>
@@ -455,6 +454,8 @@ export function BoostPage() {
       </div>
 
       {st ? <SwitchPanel st={st} /> : null}
+
+      <DeviceBoost />
 
       {st?.phase === 'done' ? <Recommendation st={st} /> : null}
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { ConnectionDials } from '../components/ConnectionDials';
 import { GlowRing } from '../components/GlowRing';
 import { SeriesChart } from '../components/SeriesChart';
 import { ThroughputChart } from '../components/ThroughputChart';
@@ -340,6 +341,9 @@ export function SignalPage() {
   const at = isPhone ? phoneAt : telemetryAt;
   const stale = isStale(at, isPhone ? STALE_MS.phone : STALE_MS.telemetry, now);
   const staleFn = isPhone ? phoneStale : telemetryStale;
+  // Router / phone connections keep their live radio rings; the PC-side readings (Wi-Fi signal, link speed) get their own dials.
+  const pcMetrics = (selected?.metrics ?? []).filter((m) => !['rsrp', 'sinr', 'rsrq'].includes(m.key));
+  const extraMetrics = selected && r.src && pcMetrics.length ? { ...selected, metrics: pcMetrics, note: null, radio_note: null } : null;
 
   useEffect(() => {
     void ensureHistory();
@@ -380,11 +384,25 @@ export function SignalPage() {
 
       {!t && !p && conn !== 'connecting' && conn !== 'demo' && telemetryAt === null && phoneAt === null ? <NoSignalSource /> : null}
 
-      <section className="rings" aria-label="Signal gauges">
-        <MetricRing metric="rsrp" value={r.rsrp} isStaleFn={staleFn} />
-        <MetricRing metric="sinr" value={r.sinr} isStaleFn={staleFn} />
-        <MetricRing metric="rsrq" value={r.rsrq} isStaleFn={staleFn} />
-      </section>
+      {selected && !r.src ? (
+        // Wi-Fi, cable, USB, Bluetooth: dials from the readings the engine sends for this connection.
+        <Panel kicker={selected.medium ?? 'Connection'} title={selected.name} className="condialpanel">
+          <ConnectionDials conn={selected} />
+        </Panel>
+      ) : (
+        <>
+          <section className="rings" aria-label="Signal gauges">
+            <MetricRing metric="rsrp" value={r.rsrp} isStaleFn={staleFn} />
+            <MetricRing metric="sinr" value={r.sinr} isStaleFn={staleFn} />
+            <MetricRing metric="rsrq" value={r.rsrq} isStaleFn={staleFn} />
+          </section>
+          {extraMetrics ? (
+            <Panel kicker="This computer's own link" title={selected?.name ?? 'Link'} className="condialpanel">
+              <ConnectionDials conn={extraMetrics} />
+            </Panel>
+          ) : null}
+        </>
+      )}
 
       {isRouter ? (
         <section className="rates" aria-label="Throughput now">

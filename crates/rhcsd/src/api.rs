@@ -19,7 +19,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 pub const CAPABILITIES: &[&str] = &[
     "telemetry", "history", "devices", "phone", "events", "router_relogin", "scan", "boost", "towers", "location", "connections",
-    "places", "switch", "boost_auto",
+    "places", "switch", "boost_auto", "device_boost",
 ];
 
 /// The hosted PULSE site, always allowed to call a home system.
@@ -78,6 +78,7 @@ pub fn router(s: Shared) -> Router {
         .route("/ws", get(ws))
         .route("/api/{*rest}", axum::routing::any(api_not_found))
         .merge(crate::boost::routes())
+        .merge(crate::devboost::routes())
         .merge(crate::towers::routes())
         .merge(crate::places::routes())
         .merge(crate::connections::routes())

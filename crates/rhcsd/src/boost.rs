@@ -685,6 +685,32 @@ pub fn start(s: &Shared, probes: u32, watch: bool) -> bool {
     true
 }
 
+/// Runs one measurement of every link and returns its results, waiting for a measurement
+/// already in progress (watch mode, auto-switch) to finish first. Does not touch watch/auto
+/// settings. None if no measurement completed within a minute.
+pub async fn measure_once(s: &Shared, probes: u32) -> Option<Vec<LinkResult>> {
+    let t0 = now_ms();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut started = false;
+    while Instant::now() < deadline {
+        if !started && !s.boost.running.load(Ordering::SeqCst) {
+            // Keep the current watch setting: start() would overwrite it.
+            started = start(s, probes, s.boost.watch.load(Ordering::SeqCst));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let st = s.boost.state.read().await;
+        // Only a measurement that began after this call counts (never a stale one).
+        if st.started.is_some_and(|t| t >= t0) && st.finished.is_some_and(|f| f >= t0) {
+            match st.phase.as_str() {
+                "done" => return Some(st.links.clone()),
+                "error" => return None,
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 /// Turns auto-switch on or off. On starts the gentle measuring loop.
 pub async fn set_auto(s: &Shared, on: bool) {
     s.boost.auto.store(on, Ordering::SeqCst);
@@ -701,6 +727,11 @@ pub async fn set_auto(s: &Shared, on: bool) {
 
 async fn auto_loop(s: &Shared) {
     while s.boost.auto.load(Ordering::SeqCst) {
+        // Game Boost for the PC (devboost.rs) is active: leave the links alone meanwhile.
+        if crate::devboost::scans_paused() {
+            tokio::time::sleep(AUTO_GAP).await;
+            continue;
+        }
         // A manual run (or watch) in progress already measures; skip this turn.
         if s.boost.running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             run_once(s, AUTO_PROBES).await;

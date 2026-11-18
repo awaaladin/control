@@ -496,3 +496,46 @@
   color: var(--accent, #2be3b1);
   border: 1px solid rgba(43, 227, 177, 0.4);
 }
+
+/* ------------------------------------------------------------------ signal dials for any connection */
+.condials { display: grid; gap: 10px; }
+.condials__detail { font-size: 13.5px; color: var(--text); opacity: 0.9; }
+.condials__rings { display: flex; flex-wrap: wrap; gap: 18px 22px; align-items: flex-start; }
+.condial { display: grid; gap: 4px; justify-items: center; }
+.condial--minor { opacity: 0.92; }
+.condial__spark { width: 150px; height: 26px; display: block; }
+.condial__spark--empty { border-bottom: 1px dashed rgba(150, 200, 230, 0.16); }
+.condial__grey { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.condials__empty { margin: 0; font-weight: 600; }
+.condials__note { margin: 0; max-width: 62ch; }
+
+/* ------------------------------------------------------------------ Boost this PC for gaming */
+.dialog__body { white-space: pre-line; }
+.devboost { display: grid; gap: 16px; margin-bottom: 16px; }
+.devboost__intro p { margin: 0 0 12px; max-width: 70ch; }
+.devpick { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-bottom: 14px; }
+.devpick__h { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
+.devpick__list { display: grid; gap: 4px; max-height: 280px; overflow: auto; padding-right: 4px; }
+.devpick__row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 10px; border-radius: 10px;
+  border: 1px solid transparent; cursor: pointer;
+}
+.devpick__row:hover { background: rgba(160, 200, 230, 0.06); }
+.devpick__row.is-on { border-color: rgba(94, 242, 170, 0.5); background: rgba(94, 242, 170, 0.06); }
+.devpick__name { font-weight: 600; }
+.devpick__sub { margin-left: auto; }
+.devpick__sep { margin: 6px 4px 2px; }
+.devacts { display: grid; gap: 6px; margin-bottom: 12px; }
+.devact { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); cursor: pointer; }
+.devact.is-off { opacity: 0.6; cursor: not-allowed; }
+.devact input { margin-top: 4px; }
+.devact__text { display: grid; gap: 2px; }
+.devact__title { font-weight: 600; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.devboost__go { margin-top: 6px; gap: 14px; align-items: center; }
+.devboost__btn { min-height: 52px; padding: 0 34px; font-size: 17px; }
+.devboost__msg { margin: 0 4px; }
+.devactive__list { margin: 6px 0 12px; padding-left: 18px; display: grid; gap: 3px; }
+.devactive__live { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 6px 0 12px; }
+.devactive__ping { font-size: 28px; font-weight: 700; }
+.devres__verdict { font-size: 16px; font-weight: 600; margin: 0 0 10px; max-width: 70ch; }
+.devres__table th, .devres__table td { text-align: left; }

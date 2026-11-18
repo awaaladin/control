@@ -112,6 +112,9 @@ A **crate** is a Rust package. A **workspace** groups several crates that build 
 | `api.rs` | HTTP routes, WebSocket, permissions, serves the PULSE build |
 | `links.rs` | Lists this machine's internet links (adapters that are up and have a gateway, via `GetAdaptersAddresses`) and names them by Wi-Fi name and device: "Jeffnou (router)", "vivo Y (phone hotspot)", "Phone (USB)" (SSIDs from `netsh wlan show interfaces`) |
 | `connections.rs` | `GET /api/connections`: every link as a named connection with the radio behind it (router or phone), throughput where known and the last Game Boost ping |
+| `bluetooth.rs` | Connected Bluetooth devices (names only; Windows gives no signal strength): PowerShell + PnP in the background, cached 30 s |
+| `winps.rs` | Runs a short PowerShell script on Windows (script on stdin, no console window); stub elsewhere |
+| `devboost.rs` | Game Boost for the PC: reversible power-plan / Game Mode / priority / notification / Wi-Fi power / QoS changes, journal in `data/devboost.json`, crash recovery, auto-restore when the game exits, before / after ping verdict. Windows operations behind the `OsOps` trait (fake in tests, stubs off Windows) |
 | `boost.rs` | Game Boost: TCP-connect ping, jitter and loss per link, scoring, recommendation, auto-switch with hysteresis; also the hourly signal summary |
 | `switch.rs` | Administrator check, one-click link switching (interface metrics via `SetIpInterfaceEntry`) and exact restore. Remembers original metrics in `data/switch.json` |
 | `towers.rs` | Cells seen by router and phone, time and signal on each, handovers, tower positions from beaconDB then OpenCellID, home and current position, distance/bearing maths. Saved in `data/towers.json` |
@@ -365,6 +368,60 @@ A router-kind link gets the router's telemetry, a phone USB / hotspot link the
 phone's own radio (only while it is readable over ADB, or on the phone hub).
 `tower` is the cell key used by `/api/towers`. On the phone hub the phone's own
 mobile data appears as `"This phone (mobile data)"` (id `phone-self`).
+
+**Metrics (every connection).** Each connection also has `metrics`, `detail` and `note`:
+```
+{ ..., kind: "router"|"phone"|"other"|"bluetooth",
+  metrics: [{ key: "rsrp"|"sinr"|"rsrq"|"wifi_signal"|"wifi_quality"|"link_speed",
+              label, unit, value: number|null,        // null = no reading, shown grey
+              min, max,                               // dial range
+              thresholds: [excellent, good, fair], higher_is_better: bool,
+              note: string|null }],
+  detail: "SSID · 802.11ac · channel 36 (5 GHz) · receive 433 / transmit 300 Mbit/s" | null,
+  note: string|null }                                 // e.g. why Bluetooth has no signal
+```
+Wi-Fi: `wifi_signal` is dBm = quality / 2 - 100 (range -100…-30, edges -50/-60/-70),
+`wifi_quality` is Windows' 0-100 % (edges 100/80/60, the same edges in %), `link_speed` is the
+adapter's negotiated rate (Wi-Fi: range 0…600, edges 200/100/40 Mbit/s). Cable, USB tether
+and other adapters: `link_speed` with range 0…1000 and edges 1000/100/10. A phone hotspot or USB
+tether also lists the phone's `rsrp`/`sinr`/`rsrq` after the PC's own metrics, labelled
+"Phone RSRP" etc. with a note; a router lists its own radio first. A `bluetooth` connection
+(`id` `bluetooth:<name>`) has `metrics: []` and a `note`: Windows reports no RSSI, none is
+invented. Wi-Fi data comes from `netsh wlan show interfaces` (English labels only), cached 2 s.
+The web side: `web/src/lib/metrics.ts` (types, `gradeOfMetric`) and
+`web/src/components/ConnectionDials.tsx` (`<ConnectionDials conn={connection} />`).
+
+#### Game Boost for the PC (`GET /api/boost/device`, `POST /api/boost/device/start`, `/stop`)
+```
+GET  -> { supported, unsupported_reason, admin,
+          actions: [{ id, title, description, needs_admin, available, default_on, active, detail }],
+          candidates: [{ pid, name, window_title?, mem_mb, likely_game, hint? }],   // programs with a window, biggest first;
+                                                                                   // window_title only for likely games
+          state: { active, phase: "idle"|"measuring_before"|"applying"|"active"|"restoring"|"restore_failed",
+                   started_at, game: {pid,name}|null, changes: [{ id, title, detail, reversible }],
+                   before: Snap|null, live: Snap|null, message },
+          last_result: { before: Snap, after: Snap, verdict: { improved: true|false|null, text,
+                         ping_ms, jitter_ms, loss_pct /* after - before */ }, finished_at } | null }
+         Snap = { link_id, link_name, ping_ms, jitter_ms, loss_pct, at }
+POST start { actions: [ids], game_pid?, background_pids?, dry_run? }   (same auth as other POSTs)
+      dry_run:true -> { ok, dry_run:true, would_change:[{id,title,detail}], skipped:[{id,reason}], game }
+                      and NOTHING is changed (not even measured)
+      otherwise    -> { ok, started:true, would_change, skipped, game }; 409 if a boost is already running
+POST stop        -> { ok, restored:[titles], message }; 500 with failed:[...] if something could not be restored
+```
+Action ids, applied in this order and restored in reverse: `power_plan_high`, `game_mode_on`,
+`game_priority_high`, `background_low_priority`, `quiet_notifications`, `pause_pulse_scans`,
+`wifi_max_performance`, `network_best_link` (admin), `network_dscp` (admin), `flush_dns`.
+Implementation: powercfg (power plan, Wi-Fi power saving), `reg.exe` on HKCU only (Game Mode
+`AutoGameModeEnabled`, notifications `ToastEnabled`), `SetPriorityClass`, `New-NetQosPolicy
+-PolicyStore ActiveStore` (DSCP 46, policy `rhcs-gameboost`), `ipconfig /flushdns`, and
+`switch.rs` for the link. Before each change its original value is saved to
+`<data dir>/devboost.json`; rhcsd restores whatever that file lists when it starts, when the
+game process exits (polled each second; a reused pid is never touched), on `stop` and on clean
+shutdown. Measurement: a Game Boost run before applying and ~10 s after, then a short run every
+20 s for the live ping; the verdict counts a change only beyond noise (ping max(3 ms, 10 %),
+jitter max(2 ms, 25 %), loss 1 point) and otherwise says "No measurable change: your game was
+limited by the connection, not the PC." Capability string: `device_boost`.
 
 #### Places shape (`GET /api/places`)
 ```

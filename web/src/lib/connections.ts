@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { create } from 'zustand';
 import { getJson } from './boost';
 import { useStore } from './store';
+import type { Metric } from './metrics';
 
 export interface ConnRadio {
   source: 'router' | 'phone';
@@ -24,7 +25,7 @@ export interface ConnRadio {
 export interface Connection {
   id: string;
   name: string;
-  kind: 'router' | 'phone' | 'other';
+  kind: 'router' | 'phone' | 'other' | 'bluetooth';
   link_kind: 'router' | 'phone_usb' | 'phone_hotspot' | 'other' | null;
   alias: string | null;
   ssid: string | null;
@@ -34,6 +35,10 @@ export interface Connection {
   radio_note: string | null;
   throughput: { rx_bps: number | null; tx_bps: number | null; source: string } | null;
   ping: { ping_ms: number | null; jitter_ms: number | null; loss_pct: number | null; score: number | null; grade: string; at: number | null } | null;
+  /** Readings for any kind of connection (Wi-Fi signal, link speed, 4G radio). */
+  metrics?: Metric[];
+  detail?: string | null;
+  note?: string | null;
 }
 
 export interface ConnectionsView {
@@ -68,4 +73,4 @@ export function useConnectionsPolling(ms = 5000): void {
   }, [baseUrl, conn, ms]);
 }
 
-export const KIND_WORD: Record<Connection['kind'], string> = { router: 'router', phone: 'phone', other: 'other network' };
+export const KIND_WORD: Record<Connection['kind'], string> = { router: 'router', phone: 'phone', other: 'other network', bluetooth: 'Bluetooth' };

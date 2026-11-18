@@ -5,9 +5,14 @@
 //! Names come from links.rs ("Jeffnou (router)", "vivo Y (phone hotspot)",
 //! "Phone (USB)"). On the phone hub (Termux) the phone's own radio is listed
 //! as "This phone (mobile data)".
+//!
+//! Every connection also carries `metrics`: readings with their own range, thresholds and
+//! direction, so the page can draw a dial for ANY kind of connection (4G radio, Wi-Fi signal,
+//! link speed). Bluetooth has none: Windows gives no signal strength for it, and none is invented.
 
+use crate::bluetooth::BtDevice;
 use crate::boost::LinkResult;
-use crate::links::{Link, LinkKind};
+use crate::links::{Link, LinkKind, WlanIf};
 use crate::phone::PhoneStatus;
 use crate::state::Shared;
 use crate::towers::cell_key;
@@ -56,6 +61,117 @@ pub struct Ping {
     pub at: Option<i64>,
 }
 
+/// One reading of one connection, self-describing so the web page needs no per-kind code.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Metric {
+    /// rsrp | sinr | rsrq | wifi_signal | wifi_quality | link_speed
+    pub key: String,
+    pub label: String,
+    pub unit: String,
+    /// None = no reading right now (shown grey, never made up).
+    pub value: Option<f64>,
+    /// Dial range.
+    pub min: f64,
+    pub max: f64,
+    /// Grade edges [excellent, good, fair]; below fair is poor. With `higher_is_better`
+    /// false the values descend the other way (value <= excellent is excellent).
+    pub thresholds: [f64; 3],
+    pub higher_is_better: bool,
+    pub note: Option<String>,
+}
+
+fn metric(key: &str, label: &str, unit: &str, value: Option<f64>, range: (f64, f64), thresholds: [f64; 3]) -> Metric {
+    Metric {
+        key: key.into(),
+        label: label.into(),
+        unit: unit.into(),
+        value: value.filter(|v| v.is_finite()),
+        min: range.0,
+        max: range.1,
+        thresholds,
+        higher_is_better: true,
+        note: None,
+    }
+}
+
+/// Windows' Wi-Fi "Signal" quality (0-100 %) as dBm. Windows defines quality as linear between
+/// -100 dBm (0 %) and -50 dBm (100 %), so dBm = quality / 2 - 100.
+pub fn dbm_from_quality(pct: f64) -> f64 {
+    pct.clamp(0.0, 100.0) / 2.0 - 100.0
+}
+
+/// Wi-Fi readings of this PC's wireless adapter.
+/// - `wifi_signal` dBm, dial -100..-30, grades -50 / -60 / -70 (excellent / good / fair).
+/// - `wifi_quality` %, dial 0..100, grades 100 / 80 / 60: exactly the same edges as the dBm
+///   dial (quality 100 % = -50 dBm, 80 % = -60 dBm, 60 % = -70 dBm), so the two never disagree.
+pub fn wifi_metrics(w: Option<&WlanIf>) -> Vec<Metric> {
+    let q = w.and_then(|w| w.signal_pct).map(f64::from);
+    vec![
+        metric("wifi_signal", "Wi-Fi signal", "dBm", q.map(dbm_from_quality), (-100.0, -30.0), [-50.0, -60.0, -70.0]),
+        metric("wifi_quality", "Wi-Fi quality", "%", q, (0.0, 100.0), [100.0, 80.0, 60.0]),
+    ]
+}
+
+/// The negotiated speed of the adapter.
+/// - Wi-Fi: dial 0..600 Mbit/s, grades 200 / 100 / 40. A Wi-Fi rate is the best the radio can
+///   do right now (it falls when the signal weakens), so it is graded lower than a cable.
+/// - Cable, USB tethering and others: dial 0..1000 Mbit/s, grades 1000 / 100 / 10.
+pub fn speed_metric(mbps: Option<f64>, wifi: bool) -> Metric {
+    let (range, thr) = if wifi { ((0.0, 600.0), [200.0, 100.0, 40.0]) } else { ((0.0, 1000.0), [1000.0, 100.0, 10.0]) };
+    metric("link_speed", "Link speed", "Mbit/s", mbps.filter(|v| *v > 0.0), range, thr)
+}
+
+/// The 4G radio readings (RSRP / SINR / RSRQ); `owner` prefixes the label ("Phone ") when the
+/// radio belongs to another device than the one drawn (a phone behind a hotspot or USB tether).
+pub fn cell_metrics(r: Option<&Radio>, owner: &str, note: Option<&str>) -> Vec<Metric> {
+    let mut v = vec![
+        metric("rsrp", &format!("{owner}RSRP"), "dBm", r.and_then(|r| r.rsrp).map(f64::from), (-120.0, -70.0), [-80.0, -90.0, -100.0]),
+        metric("sinr", &format!("{owner}SINR"), "dB", r.and_then(|r| r.sinr).map(f64::from), (-5.0, 30.0), [20.0, 13.0, 0.0]),
+        metric("rsrq", &format!("{owner}RSRQ"), "dB", r.and_then(|r| r.rsrq).map(f64::from), (-20.0, -3.0), [-10.0, -15.0, -20.0]),
+    ];
+    for m in v.iter_mut() {
+        m.note = note.map(str::to_string);
+    }
+    v
+}
+
+/// Plain one-line description of the PC-side link: SSID, standard, channel, band, rates.
+pub fn wifi_detail(w: &WlanIf) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(s) = &w.ssid {
+        parts.push(s.clone());
+    }
+    if let Some(r) = &w.radio_type {
+        parts.push(r.clone());
+    }
+    match (w.channel, &w.band) {
+        (Some(c), Some(b)) => parts.push(format!("channel {c} ({b})")),
+        (Some(c), None) => parts.push(format!("channel {c}")),
+        (None, Some(b)) => parts.push(b.clone()),
+        _ => {}
+    }
+    let rate = |v: f64| if v.fract() == 0.0 { format!("{v:.0}") } else { format!("{v:.1}") };
+    match (w.rx_mbps, w.tx_mbps) {
+        (Some(r), Some(t)) => parts.push(format!("receive {} / transmit {} Mbit/s", rate(r), rate(t))),
+        (Some(r), None) => parts.push(format!("receive {} Mbit/s", rate(r))),
+        (None, Some(t)) => parts.push(format!("transmit {} Mbit/s", rate(t))),
+        _ => {}
+    }
+    parts.join(" · ")
+}
+
+fn wired_detail(l: &Link, mbps: Option<f64>) -> String {
+    let what = if l.kind == LinkKind::PhoneUsb { "USB tethering".to_string() } else { l.medium.clone() };
+    let mut parts = vec![what];
+    if !l.description.is_empty() {
+        parts.push(l.description.clone());
+    }
+    if let Some(m) = mbps {
+        parts.push(format!("{} Mbit/s", if m.fract() == 0.0 { format!("{m:.0}") } else { format!("{m:.1}") }));
+    }
+    parts.join(" · ")
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Connection {
     /// Stable id: the link's local address, or "phone-self".
@@ -75,6 +191,12 @@ pub struct Connection {
     pub radio_note: Option<String>,
     pub throughput: Option<Throughput>,
     pub ping: Option<Ping>,
+    /// Signal readings for any kind of connection (see [`Metric`]); empty when there are none.
+    pub metrics: Vec<Metric>,
+    /// One plain line: SSID, standard, channel, band, rates / adapter and speed / device state.
+    pub detail: Option<String>,
+    /// Why `metrics` is empty or grey, in plain words.
+    pub note: Option<String>,
 }
 
 pub fn router_radio(t: &Telemetry) -> Radio {
@@ -128,6 +250,18 @@ pub struct Inputs<'a> {
     pub boost_at: Option<i64>,
     /// rhcsd runs on the phone itself (Termux).
     pub on_phone: bool,
+    /// Wireless interfaces (netsh), for the Wi-Fi readings.
+    pub wlan: &'a [WlanIf],
+    /// Negotiated adapter speed in Mbit/s by interface index.
+    pub speeds: &'a [(u32, f64)],
+    /// Connected Bluetooth devices (names only; there is no signal reading for them).
+    pub bluetooth: &'a [BtDevice],
+}
+
+/// "Pocket Phone (Bluetooth)" -> stable id "bluetooth:pocket-phone".
+fn bt_id(name: &str) -> String {
+    let slug: String = name.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
+    format!("bluetooth:{}", slug.trim_matches('-'))
 }
 
 /// Builds the connection list. Pure, so it is unit-tested.
@@ -157,6 +291,31 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
                 }
                 _ => None,
             };
+            let is_wifi = l.medium == "Wi-Fi";
+            let w = i.wlan.iter().find(|w| w.name == l.adapter && w.signal_pct.is_some());
+            let adapter_mbps = i.speeds.iter().find(|(idx, _)| *idx == l.if_index).map(|(_, m)| *m);
+            // Wi-Fi: the adapter's negotiated rate, else what netsh reports (slower direction).
+            let mbps = adapter_mbps.or_else(|| w.and_then(|w| match (w.rx_mbps, w.tx_mbps) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }));
+            let mut pc = if is_wifi { wifi_metrics(w) } else { Vec::new() };
+            pc.push(speed_metric(mbps, is_wifi));
+            let detail = if is_wifi { w.map(wifi_detail).filter(|d| !d.is_empty()) } else { Some(wired_detail(l, mbps)) };
+            let phone_note = "The phone's mobile signal, not this PC's link";
+            let metrics = match l.kind {
+                LinkKind::Router => {
+                    let mut m = cell_metrics(radio.as_ref(), "", None);
+                    m.extend(pc);
+                    m
+                }
+                LinkKind::PhoneUsb | LinkKind::PhoneHotspot => {
+                    let mut m = pc;
+                    m.extend(cell_metrics(radio.as_ref(), "Phone ", Some(phone_note)));
+                    m
+                }
+                LinkKind::Other => pc,
+            };
             let ping = i.boost.iter().find(|r| r.link.id == l.id).filter(|r| r.stats.sent > 0).map(|r| Ping {
                 ping_ms: r.stats.ping_ms,
                 jitter_ms: r.stats.jitter_ms,
@@ -165,6 +324,7 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
                 grade: r.grade.clone(),
                 at: i.boost_at,
             });
+            let note = if radio.is_none() { note.clone() } else { None };
             Connection {
                 id: l.id.clone(),
                 name: l.name.clone(),
@@ -175,9 +335,12 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
                 medium: Some(l.medium.clone()),
                 in_use: Some(l.is_default),
                 radio,
-                radio_note: note,
+                radio_note: note.clone(),
                 throughput,
                 ping,
+                metrics,
+                detail,
+                note,
             }
         })
         .collect();
@@ -199,8 +362,30 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
                 radio_note: None,
                 throughput: None,
                 ping: None,
+                metrics: cell_metrics(Some(&phone_radio(p)), "", None),
+                detail: Some("This phone's own mobile data".into()),
+                note: None,
             });
         }
+    }
+    for d in i.bluetooth.iter().filter(|d| d.connected) {
+        out.push(Connection {
+            id: bt_id(&d.name),
+            name: format!("{} (Bluetooth)", d.name),
+            kind: "bluetooth".into(),
+            link_kind: None,
+            alias: None,
+            ssid: None,
+            medium: Some("Bluetooth".into()),
+            in_use: None,
+            radio: None,
+            radio_note: None,
+            throughput: None,
+            ping: None,
+            metrics: Vec::new(),
+            detail: Some("Connected".into()),
+            note: Some(crate::bluetooth::NO_RSSI_NOTE.into()),
+        });
     }
     out
 }
@@ -230,6 +415,9 @@ async fn get_connections(State(s): State<Shared>) -> Json<Value> {
     let i = s.inner.read().await;
     let router = i.telemetry.as_ref().filter(|_| i.sources.router.online);
     let phone = i.phone.as_ref().filter(|_| i.sources.phone.online);
+    let wlan = crate::links::wlan_interfaces().await;
+    let speeds = tokio::task::spawn_blocking(crate::links::adapter_speeds).await.unwrap_or_default();
+    let bluetooth = crate::bluetooth::connected();
     let list = build(&Inputs {
         links: &links,
         router,
@@ -238,6 +426,9 @@ async fn get_connections(State(s): State<Shared>) -> Json<Value> {
         boost: &boost.links,
         boost_at: boost.finished.or(boost.started),
         on_phone: crate::phone::in_termux(),
+        wlan: &wlan,
+        speeds: &speeds,
+        bluetooth: &bluetooth,
     });
     let best_id = best(&list).map(|c| c.id.clone());
     Json(json!({
@@ -245,6 +436,7 @@ async fn get_connections(State(s): State<Shared>) -> Json<Value> {
         "best": best_id,
         "admin": s.admin,
         "switch_supported": crate::switch::supported(),
+        "bluetooth_supported": crate::bluetooth::supported(),
     }))
 }
 
@@ -332,5 +524,129 @@ mod tests {
         let list = build(&Inputs { links: &[], phone: Some(&p), phone_model: Some("Y03".into()), on_phone: true, ..Default::default() });
         assert_eq!(list[0].name, "This phone (mobile data) · Y03");
         assert_eq!(best(&list).unwrap().id, "phone-self");
+    }
+
+    fn get<'a>(c: &'a Connection, key: &str) -> &'a Metric {
+        c.metrics.iter().find(|m| m.key == key).unwrap_or_else(|| panic!("no metric {key}"))
+    }
+
+    #[test]
+    fn dbm_conversion_matches_windows_quality() {
+        assert_eq!(dbm_from_quality(100.0), -50.0);
+        assert_eq!(dbm_from_quality(0.0), -100.0);
+        assert_eq!(dbm_from_quality(80.0), -60.0);
+        assert_eq!(dbm_from_quality(60.0), -70.0);
+        assert_eq!(dbm_from_quality(250.0), -50.0, "clamped");
+    }
+
+    #[test]
+    fn wifi_link_gets_signal_quality_and_speed() {
+        let mut l = link("Cafe (Wi-Fi)", LinkKind::Other, "172.16.4.9", true);
+        l.if_index = 9;
+        let w = WlanIf {
+            name: "WiFi".into(),
+            ssid: Some("Cafe".into()),
+            signal_pct: Some(90),
+            radio_type: Some("802.11ac".into()),
+            channel: Some(36),
+            band: Some("5 GHz".into()),
+            rx_mbps: Some(433.3),
+            tx_mbps: Some(300.0),
+            ..Default::default()
+        };
+        let list = build(&Inputs { links: &[l], wlan: &[w], speeds: &[(9, 300.0)], ..Default::default() });
+        let c = &list[0];
+        let keys: Vec<&str> = c.metrics.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, ["wifi_signal", "wifi_quality", "link_speed"]);
+        assert_eq!(get(c, "wifi_signal").value, Some(-55.0));
+        assert_eq!(get(c, "wifi_signal").thresholds, [-50.0, -60.0, -70.0]);
+        assert_eq!((get(c, "wifi_signal").min, get(c, "wifi_signal").max), (-100.0, -30.0));
+        assert_eq!(get(c, "wifi_quality").value, Some(90.0));
+        assert_eq!(get(c, "link_speed").value, Some(300.0));
+        assert_eq!(get(c, "link_speed").thresholds, [200.0, 100.0, 40.0]);
+        assert!(c.metrics.iter().all(|m| m.higher_is_better));
+        assert_eq!(c.detail.as_deref(), Some("Cafe · 802.11ac · channel 36 (5 GHz) · receive 433.3 / transmit 300 Mbit/s"));
+
+        // netsh gave nothing (other language, service off): grey dials, no invented number.
+        let list = build(&Inputs { links: &[link("Cafe (Wi-Fi)", LinkKind::Other, "172.16.4.9", true)], ..Default::default() });
+        assert_eq!(get(&list[0], "wifi_signal").value, None);
+        assert_eq!(get(&list[0], "link_speed").value, None);
+    }
+
+    #[test]
+    fn wired_and_usb_links_get_link_speed() {
+        let mut eth = link("Ethernet", LinkKind::Other, "192.168.30.5", true);
+        eth.medium = "Ethernet".into();
+        eth.description = "Example GbE".into();
+        eth.if_index = 3;
+        let mut usb = link("Phone (USB)", LinkKind::PhoneUsb, "10.0.40.5", false);
+        usb.medium = "USB".into();
+        usb.description = "Remote NDIS based Internet Sharing Device".into();
+        usb.if_index = 5;
+        let p = PhoneStatus { rsrp: Some(-92.0), sinr: Some(11.0), rsrq: Some(-12.0), ..Default::default() };
+        let list = build(&Inputs { links: &[eth, usb], phone: Some(&p), speeds: &[(3, 1000.0), (5, 425.0)], ..Default::default() });
+        let e = &list[0];
+        assert_eq!(e.metrics.len(), 1);
+        assert_eq!(get(e, "link_speed").value, Some(1000.0));
+        assert_eq!(get(e, "link_speed").thresholds, [1000.0, 100.0, 10.0]);
+        assert_eq!(e.detail.as_deref(), Some("Ethernet · Example GbE · 1000 Mbit/s"));
+        // USB tether: the PC's cable speed, then the phone's own mobile signal, labelled as such.
+        let u = &list[1];
+        let keys: Vec<&str> = u.metrics.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, ["link_speed", "rsrp", "sinr", "rsrq"]);
+        assert_eq!(get(u, "rsrp").label, "Phone RSRP");
+        assert_eq!(get(u, "rsrp").value, Some(-92.0));
+        assert!(get(u, "rsrp").note.as_deref().unwrap().contains("phone's mobile signal"));
+        assert!(u.detail.as_deref().unwrap().starts_with("USB tethering"));
+        // Phone not readable: the mobile dials stay, empty, with the reason.
+        let list = build(&Inputs { links: &[link("Phone (USB)", LinkKind::PhoneUsb, "10.0.40.5", false)], ..Default::default() });
+        assert_eq!(get(&list[0], "rsrp").value, None);
+        assert!(list[0].note.as_deref().unwrap().contains("ADB"));
+    }
+
+    #[test]
+    fn router_keeps_its_radio_metrics_first() {
+        let mut l = link("HomeNet (router)", LinkKind::Router, "192.168.0.20", true);
+        l.if_index = 4;
+        let t = Telemetry { rsrp: Some(-95.0), sinr: Some(8.0), rsrq: Some(-11.0), ..Default::default() };
+        let w = WlanIf { name: "WiFi".into(), signal_pct: Some(70), ..Default::default() };
+        let list = build(&Inputs { links: &[l], router: Some(&t), wlan: &[w], ..Default::default() });
+        let keys: Vec<&str> = list[0].metrics.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, ["rsrp", "sinr", "rsrq", "wifi_signal", "wifi_quality", "link_speed"]);
+        assert_eq!(get(&list[0], "sinr").value, Some(8.0));
+        assert_eq!(get(&list[0], "rsrp").label, "RSRP");
+        assert_eq!(get(&list[0], "rsrp").thresholds, [-80.0, -90.0, -100.0]);
+        assert_eq!(get(&list[0], "wifi_signal").value, Some(-65.0));
+    }
+
+    #[test]
+    fn bluetooth_devices_are_connections_without_invented_signal() {
+        let bt = [
+            BtDevice { name: "Example Headset".into(), connected: true },
+            BtDevice { name: "Idle Mouse".into(), connected: false },
+        ];
+        let list = build(&Inputs { bluetooth: &bt, ..Default::default() });
+        assert_eq!(list.len(), 1, "only connected devices");
+        let c = &list[0];
+        assert_eq!((c.kind.as_str(), c.medium.as_deref()), ("bluetooth", Some("Bluetooth")));
+        assert_eq!(c.id, "bluetooth:example-headset");
+        assert_eq!(c.name, "Example Headset (Bluetooth)");
+        assert!(c.metrics.is_empty());
+        assert_eq!(c.detail.as_deref(), Some("Connected"));
+        assert!(c.note.as_deref().unwrap().contains("does not report a signal strength"));
+        assert!(c.radio.is_none() && c.in_use.is_none());
+    }
+
+    #[test]
+    fn json_keeps_old_fields_and_adds_metrics() {
+        let list = build(&Inputs { links: &[link("Cafe (Wi-Fi)", LinkKind::Other, "172.16.4.9", true)], ..Default::default() });
+        let v = serde_json::to_value(&list[0]).unwrap();
+        for k in ["id", "name", "kind", "link_kind", "alias", "ssid", "medium", "in_use", "radio", "radio_note", "throughput", "ping", "metrics", "detail", "note"] {
+            assert!(v.get(k).is_some(), "missing {k}");
+        }
+        let m = &v["metrics"][0];
+        for k in ["key", "label", "unit", "value", "min", "max", "thresholds", "higher_is_better", "note"] {
+            assert!(m.get(k).is_some(), "metric missing {k}");
+        }
     }
 }
