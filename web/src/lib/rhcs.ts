@@ -1,4 +1,5 @@
 import { savedHere } from './engine';
+import { appToken } from './appbridge';
 // Typed rhcsd API client, WebSocket manager and live/demo orchestration.
 
 import { phoneSamples, samples, sampleFromTelemetry } from './buffer';
@@ -65,6 +66,11 @@ function wsUrl(base: string): string {
 /** The token for this backend: its own if saved, else the global one. */
 export function tokenFor(base: string): string {
   const p = get().prefs;
+  // Inside the Android app the phone itself knows the built-in engine's token: never ask the person for it.
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(base)) {
+    const t = appToken();
+    if (t) return t;
+  }
   return (p.tokens[normalizeUrl(base)] ?? '').trim() || p.token.trim();
 }
 

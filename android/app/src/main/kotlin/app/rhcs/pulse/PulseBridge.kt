@@ -22,6 +22,30 @@ class PulseBridge(
 ) {
     private val denied = JSONObject().put("available", false).toString()
 
+    /** The engine's access token for this phone, so the page never asks the person for it. Only for the built-in engine's own page. */
+    @JavascriptInterface
+    fun getToken(): String = if (trusted()) Engine.token(ctx) else ""
+
+    @JavascriptInterface
+    fun engineState(): String =
+        if (!trusted()) denied
+        else JSONObject().put("available", true).put("state", Engine.state).put("stopped_by_user", Engine.stoppedByUser).put("error", Engine.error ?: "").toString()
+
+    @JavascriptInterface
+    fun startEngine() {
+        if (!trusted()) return
+        Engine.setEnabled(ctx, true)
+        Engine.stoppedByUser = false
+        EngineService.start(ctx)
+    }
+
+    @JavascriptInterface
+    fun stopEngine() {
+        if (!trusted()) return
+        EngineService.stop(ctx)
+        Engine.setEnabled(ctx, false)
+    }
+
     @JavascriptInterface
     fun getStatus(): String = if (trusted()) GameBoost.statusJson(ctx) else denied
 

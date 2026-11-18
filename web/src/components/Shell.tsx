@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { fmtAgo, fmtTime } from '../lib/format';
 import { insideApp, savedHere } from '../lib/engine';
+import { appEngineState, appStartEngine } from '../lib/appbridge';
 import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl, setBackendToken } from '../lib/rhcs';
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
@@ -421,6 +422,11 @@ function ConnectionCard({ onSettings }: { onSettings: () => void }) {
         </ul>
         <p className="muted small">Last data: {telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</p>
 
+        {insideApp() && appEngineState() && appEngineState()!.state !== 'running' ? (
+          <button type="button" className="btn btn--accent" onClick={() => appStartEngine()}>
+            Start the engine
+          </button>
+        ) : null}
         {insideApp() ? null : <AppDownload variant="card" />}
         {!insideApp() && location.protocol === 'https:' ? (
           <p className="muted small">This secure page can't open addresses like 10.x.x.x directly; open the address as its own page instead.</p>

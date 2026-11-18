@@ -131,6 +131,8 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.introContinue).setOnClickListener {
             intro.visibility = View.GONE
+            // Saying "Start" is the answer to the question: mark it asked, or enableEngine() would ask again forever.
+            Engine.setEnabled(this, true)
             enableEngine()
         }
         findViewById<Button>(R.id.introOther).setOnClickListener {

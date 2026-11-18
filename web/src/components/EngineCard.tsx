@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { fmtDuration } from '../lib/format';
 import { detectOs, getEngine, insideApp, startEngineLink, stopEngine, type EngineInfo, type EngineResult } from '../lib/engine';
 import { confirmAction, toast, useStore } from '../lib/store';
+import { appEngineState, appStartEngine, appStopEngine } from '../lib/appbridge';
 import { Badge, KV } from './ui';
 
 const MODE: Record<EngineInfo['mode'], string> = { app: 'Android app', windows: 'Windows', termux: 'Termux', other: 'Other' };
@@ -39,6 +40,14 @@ export function EngineCard() {
     });
     if (!ok) return;
     setBusy(true);
+    if (inApp) {
+      // The app stops its own engine directly: no token, no network call.
+      appStopEngine();
+      setStopped(true);
+      toast('ok', 'Engine stopped', 'You can start it again with the Start button.');
+      setBusy(false);
+      return;
+    }
     const r = await stopEngine();
     if (r.outcome === 'stopped') {
       setStopped(true);
@@ -73,10 +82,31 @@ export function EngineCard() {
             <p className="muted engine-card__small">Your browser may ask to open "PULSE". Allow it once. This page reconnects by itself.</p>
           </>
         ) : inApp ? (
-          <p className="muted">Use the Start button in the app.</p>
+          <>
+            <button
+              type="button"
+              className="btn btn--accent"
+              onClick={() => {
+                appStartEngine();
+                toast('info', 'Starting the engine', 'This page reconnects by itself in a few seconds.');
+              }}
+            >
+              Start engine
+            </button>
+            <p className="muted engine-card__small">The engine runs inside this app. This page reconnects by itself.</p>
+          </>
         ) : (
           <p className="muted">Start rhcsd again where it is installed (for example, run it again in Termux).</p>
         )}
+      </>
+    );
+  } else if (inApp && (res === null || res.kind === 'down') && appEngineState() && appEngineState()!.state !== 'running') {
+    body = (
+      <>
+        <p className="muted">The engine is {appEngineState()!.state === 'starting' ? 'starting…' : 'stopped.'}</p>
+        <button type="button" className="btn btn--accent" onClick={() => appStartEngine()}>
+          Start engine
+        </button>
       </>
     );
   } else if (res?.kind === 'old') {
