@@ -22,6 +22,9 @@ export function detectOs(): OsKind {
   return 'other';
 }
 
+/** Where PULSE keeps your saved settings, in words that fit where it is running. */
+export const savedHere = (): string => (insideApp() ? 'this phone' : 'this browser');
+
 /** True inside the Android app (its user agent carries "PulseApp"); the engine is bundled there. */
 export const insideApp = (): boolean => /PulseApp/.test(navigator.userAgent);
 

@@ -1,3 +1,4 @@
+import { savedHere } from './engine';
 // Typed rhcsd API client, WebSocket manager and live/demo orchestration.
 
 import { phoneSamples, samples, sampleFromTelemetry } from './buffer';
@@ -241,7 +242,7 @@ export function applyPairingFromHash(): boolean {
   } catch {
     /* keep raw */
   }
-  toast('ok', `Paired with ${host}`, token ? 'Address and access token saved in this browser.' : 'Address saved. Enter the access token if asked.');
+  toast('ok', `Paired with ${host}`, token ? `Address and access token saved on ${savedHere()}.` : 'Address saved. Enter the access token if asked.');
   return true;
 }
 

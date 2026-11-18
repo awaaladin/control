@@ -350,6 +350,31 @@ function Tips({ st }: { st: BoostState | null }) {
   const phone = useStore((s) => s.phone);
   const others = devices.filter((d) => !d.is_self && !d.is_gateway).length + (phone?.hotspot_clients?.length ?? 0);
   const usesPhone = st?.links.some((l) => l.kind !== 'router' && l.kind !== 'other');
+  if (insideApp()) {
+    return (
+      <Panel kicker="What else helps" title="Tips for lower ping">
+        <ol className="tips">
+          <li>
+            <strong>Find the spot with the best signal.</strong> Higher SINR means fewer resends and steadier ping.{' '}
+            <button type="button" className="linkbtn" onClick={() => setAim(true)}>
+              Open Aim mode
+            </button>
+          </li>
+          <li>
+            <strong>Pause downloads and app updates while you play.</strong> They share the same connection as your game.
+          </li>
+          <li>
+            <strong>Keep the phone cool and charging.</strong> A hot phone slows its modem down.
+            {isNum(phone?.battery_temp_c) ? ` It is ${fmt(phone?.battery_temp_c, 1)} °C now.` : ''}
+          </li>
+          <li>
+            <strong>Near your router, use 5 GHz Wi-Fi; far from it, mobile data may be steadier.</strong> Game Boost tells you which one
+            is faster right now.
+          </li>
+        </ol>
+      </Panel>
+    );
+  }
   return (
     <Panel kicker="What else helps" title="Tips for lower ping">
       <ol className="tips">
@@ -400,7 +425,7 @@ export function BoostPage() {
   const head = (
     <header className="pagehead">
       <div>
-        <div className="pagehead__kicker">Lowest, steadiest ping</div>
+        <div className="pagehead__kicker">{insideApp() ? 'Your phone, your network' : 'Lowest, steadiest ping'}</div>
         <h1 className="pagehead__title">Game Boost</h1>
       </div>
       <div className="pagehead__actions">
@@ -448,21 +473,32 @@ export function BoostPage() {
         <RunButton st={st} onRun={() => void runBoost(watch)} />
         <div className="boost-hero__text">
           <p>
-            Game Boost pings the internet through <strong>each</strong> of this computer's connections (router, phone over USB, phone
-            hotspot) {st ? `${st.probes} times, ${st.interval_ms} ms apart,` : ''} and tells you which one gives the lowest and steadiest
-            ping.
+            {insideApp() ? (
+              <>
+                Game Boost pings the internet through <strong>each</strong> connection this phone has (Wi-Fi, mobile data){' '}
+                {st ? `${st.probes} times, ${st.interval_ms} ms apart,` : ''} and tells you which one gives the lowest and steadiest ping.
+              </>
+            ) : (
+              <>
+                Game Boost pings the internet through <strong>each</strong> of this computer's connections (router, phone over USB, phone
+                hotspot) {st ? `${st.probes} times, ${st.interval_ms} ms apart,` : ''} and tells you which one gives the lowest and steadiest
+                ping.
+              </>
+            )}
           </p>
           <p className="muted small">
-            It measures and recommends; with rhcsd running as administrator it can also switch for you (below). It cannot make the
-            signal stronger. Targets: {st?.targets.join(', ') || '—'}
+            {insideApp()
+              ? 'It measures and recommends. Switching between Wi-Fi and mobile data is one tap in Android settings; it cannot make the signal stronger. '
+              : 'It measures and recommends; with rhcsd running as administrator it can also switch for you (below). It cannot make the signal stronger. '}
+            Targets: {st?.targets.join(', ') || '—'}
           </p>
           {st?.error ? <div className="boost-error g-poor">{st.error}</div> : null}
         </div>
       </div>
 
-      {st ? <SwitchPanel st={st} /> : null}
+      {st && !insideApp() ? <SwitchPanel st={st} /> : null}
 
-      <DeviceBoost />
+      {insideApp() ? null : <DeviceBoost />}
 
       {st?.phase === 'done' ? <Recommendation st={st} /> : null}
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { fmtAgo, fmtTime } from '../lib/format';
+import { insideApp, savedHere } from '../lib/engine';
 import { addHub, blockedByBrowser, goLive, lastSearch, normalizeUrl, setBackendToken } from '../lib/rhcs';
 import { dismissToast, isStale, STALE_MS, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
@@ -292,7 +293,7 @@ function ConnectionCard({ onSettings }: { onSettings: () => void }) {
     const host = baseUrl.replace(/^https?:\/\//, '');
     const text: Record<NonNullable<typeof authIssue>, [string, string]> = {
       needs: ['This backend needs an access token', `${host} answered, but it only talks to PULSE when you give it the access token (RHCSD_TOKEN in the .env on that device).`],
-      wrong: ['Wrong access token', `${host} rejected the token saved in this browser. Check it against RHCSD_TOKEN in the .env on that device, then enter it again.`],
+      wrong: ['Wrong access token', `${host} rejected the token saved on ${savedHere()}. Check it against RHCSD_TOKEN in the .env on that device, then enter it again.`],
       locked: ['Too many wrong attempts', `${host} is ignoring this address for a few minutes after repeated wrong tokens. Wait, then enter the right token.`],
       forbidden: ['Remote access is not set up on that device', `${host} refuses remote callers until RHCSD_TOKEN of at least 20 characters is set in its .env. Set it there, restart rhcsd, then retry.`],
     };
@@ -420,8 +421,8 @@ function ConnectionCard({ onSettings }: { onSettings: () => void }) {
         </ul>
         <p className="muted small">Last data: {telemetryAt ? fmtAgo(telemetryAt, now) : 'none yet'}</p>
 
-        <AppDownload variant="card" />
-        {location.protocol === 'https:' ? (
+        {insideApp() ? null : <AppDownload variant="card" />}
+        {!insideApp() && location.protocol === 'https:' ? (
           <p className="muted small">This secure page can't open addresses like 10.x.x.x directly; open the address as its own page instead.</p>
         ) : null}
         <form
@@ -461,9 +462,18 @@ function ConnectionCard({ onSettings }: { onSettings: () => void }) {
         ) : null}
 
         <ul className="unreach__tips muted">
-          <li>On the laptop: rhcsd must be running (it prints "listening on … 7878").</li>
-          <li>On the phone: start the hub in Termux with <span className="num">~/rhcs/start.sh</span>, then Retry: this device is searched automatically.</li>
-          <li>Phone and laptop on the same Wi-Fi or hotspot? Open the laptop's address directly (button above) and it works without any setup.</li>
+          {insideApp() ? (
+            <>
+              <li>PULSE runs its own engine inside this app. Make sure the engine switch is on (the notification says "PULSE engine is on").</li>
+              <li>To use a PULSE system on your network instead, type its address above or use "Find my system".</li>
+            </>
+          ) : (
+            <>
+              <li>On the laptop: rhcsd must be running (it prints "listening on … 7878").</li>
+              <li>On the phone: start the hub in Termux with <span className="num">~/rhcs/start.sh</span>, then Retry: this device is searched automatically.</li>
+              <li>Phone and laptop on the same Wi-Fi or hotspot? Open the laptop's address directly (button above) and it works without any setup.</li>
+            </>
+          )}
         </ul>
         <div className="unreach__actions">
           <button type="button" className="btn btn--accent" onClick={() => void retry()} disabled={busy}>

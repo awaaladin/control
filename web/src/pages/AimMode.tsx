@@ -1,3 +1,4 @@
+import { savedHere } from '../lib/engine';
 import { useEffect, useRef, useState } from 'react';
 import { GlowRing } from '../components/GlowRing';
 import { Icon, Switch } from '../components/ui';
@@ -332,7 +333,7 @@ export function AimMode() {
 
           <div className="spots">
             {spots.length === 0 ? (
-              <p className="muted small">Marked spots are saved in this browser so you can compare positions.</p>
+              <p className="muted small">Marked spots are saved on {savedHere()} so you can compare positions.</p>
             ) : (
               <ol className="spots__list">
                 {[...spots]
