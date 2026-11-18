@@ -21,6 +21,8 @@ object Engine {
     @Volatile var state: String = "stopped"
     @Volatile var error: String? = null
     @Volatile var reporterNote: String? = null
+    /** The serving cell's latest RSRP (dBm) as read by the reporter; null when unknown. Used by Game Boost. */
+    @Volatile var lastRsrp: Int? = null
     /** The user (or the Stop button in PULSE) ended the engine: it is not restarted until Start. */
     @Volatile var stoppedByUser: Boolean = false
 

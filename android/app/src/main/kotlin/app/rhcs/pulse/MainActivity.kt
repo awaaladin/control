@@ -70,7 +70,7 @@ class MainActivity : AppCompatActivity() {
     private var waitJob: Job? = null
 
     private val prefs by lazy { getSharedPreferences("pulse", Context.MODE_PRIVATE) }
-    private var currentHub: String? = null
+    @Volatile private var currentHub: String? = null
 
     private val hubRows = mutableListOf<Row>()
     private val otherRows = mutableListOf<Row>()
@@ -212,6 +212,11 @@ class MainActivity : AppCompatActivity() {
         s.userAgentString = s.userAgentString + " PulseApp/0.1"
         web.setBackgroundColor(0xFF05080C.toInt())
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) WebView.setWebContentsDebuggingEnabled(true)
+
+        web.addJavascriptInterface(
+            PulseBridge(applicationContext, { currentHub == Engine.BASE }, { block -> runOnUiThread { block() } }),
+            "PulseApp",
+        )
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

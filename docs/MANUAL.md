@@ -314,6 +314,16 @@ program as failed and carries on). The window list shows names and memory of pro
 window; window titles are shown only for programs that look like games or emulators.
 On Android there is nothing to apply: an app cannot change how another app performs.
 
+#### Phone Game Boost (Android app only)
+
+In the Android app the Boost page has a **Phone Game Boost** panel at the top. It is off until you switch it on.
+
+What it does while it is on: it notices when a game opens (apps Android lists as games, plus any you tick under **Choose games**), and then every 10 seconds measures the connection delay separately over Wi-Fi and over mobile data (time to open a connection to 1.1.1.1, middle of 3 tries). If the other network is at least 25 % and 15 ms faster three rounds in a row, you get a notification and a button that opens Android's internet settings, one tap from switching. If your signal is weak and PULSE has a saved better spot for this place, it says so; otherwise it says it has none. It can also silence notifications (Do Not Disturb, priority only) and ask Android to keep Wi-Fi in low-latency mode while you play. All of that is put back when the game closes, when you switch it off, or when the app restarts after a crash.
+
+What it cannot do: lock the phone to a cell tower, force 4G/5G or "tower auto" (Android only lets the carrier or a rooted phone do that), switch networks for you, or make a weak signal stronger. The Wi-Fi low-latency lock is best effort and many phones only honour it for the app on screen.
+
+One-time setup on the phone: switch **Game Boost for this phone** on, tap **Grant usage access** and allow PULSE, and (optional) tap **Grant Do Not Disturb access** and allow PULSE. It stays active while the PULSE notification is showing and does not restart after the phone reboots until you open the app.
+
 ### 2.9 Towers: where your signal comes from
 Every cell (tower antenna) the router or the phone has used is recorded, with
 how long each stayed on it and the signal it got there. Records survive

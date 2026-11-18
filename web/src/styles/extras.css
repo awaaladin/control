@@ -539,3 +539,15 @@
 .devactive__ping { font-size: 28px; font-weight: 700; }
 .devres__verdict { font-size: 16px; font-weight: 600; margin: 0 0 10px; max-width: 70ch; }
 .devres__table th, .devres__table td { text-align: left; }
+
+/* Phone Game Boost (Android app only) */
+.phoneboost { margin-bottom: 1rem; }
+.phoneboost__need { display: flex; gap: .75rem; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: .6rem 0; padding: .6rem .8rem; border-radius: 10px; background: rgba(255, 255, 255, .05); font-size: .85rem; }
+.phoneboost__opts { display: grid; gap: .5rem; margin: .8rem 0; }
+.phoneboost__live { margin-top: .8rem; display: grid; gap: .4rem; }
+.phoneboost__net { display: flex; justify-content: space-between; align-items: center; padding: .4rem .2rem; border-bottom: 1px solid rgba(255, 255, 255, .08); }
+.phoneboost__status { margin: 0; padding-left: 1.1rem; }
+.phoneboost__games, .phoneboost__can { margin-top: .8rem; }
+.phoneboost__games summary, .phoneboost__can summary { cursor: pointer; font-weight: 600; }
+.phoneboost__list { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 14rem; overflow: auto; display: grid; gap: .35rem; }
+.phoneboost .input { width: 100%; box-sizing: border-box; margin-top: .4rem; }

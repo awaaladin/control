@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { DeviceBoost } from '../components/DeviceBoost';
+import { PhoneBoost } from '../components/PhoneBoost';
+import { insideApp } from '../lib/engine';
 import { GlowRing } from '../components/GlowRing';
 import { Badge, Empty, Icon, KV, Panel, Switch } from '../components/ui';
 import {
@@ -393,6 +395,8 @@ export function BoostPage() {
   const busy = !!st && (st.running || st.phase === 'measuring');
   const watching = st?.watch ?? false;
 
+  const phone = insideApp() ? <PhoneBoost /> : null;
+
   const head = (
     <header className="pagehead">
       <div>
@@ -416,6 +420,7 @@ export function BoostPage() {
     return (
       <div className="page">
         {head}
+        {phone}
         <Panel>
           <Empty title="This rhcsd has no Game Boost">The backend answered but doesn't know /api/boost. Update and restart rhcsd.</Empty>
         </Panel>
@@ -426,6 +431,7 @@ export function BoostPage() {
     return (
       <div className="page">
         {head}
+        {phone}
         <Panel>
           <Empty title="Not connected">Game Boost runs on the home system. It will appear once PULSE is connected.</Empty>
         </Panel>
@@ -437,6 +443,7 @@ export function BoostPage() {
   return (
     <div className="page page--boost">
       {head}
+      {phone}
       <div className="boost-hero">
         <RunButton st={st} onRun={() => void runBoost(watch)} />
         <div className="boost-hero__text">

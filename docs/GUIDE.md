@@ -536,6 +536,17 @@ LICENSE
 
 **Website side**: `web/src/lib/engine.ts` (URL, OS detection, `getEngine`, `stopEngine`), `components/EnginePrompt.tsx` (the first-run card, mounted next to the connection card in `Shell.tsx`, shown only when no backend answers and not inside the app; "Not now" is stored in `localStorage` key `pulse.engineSnooze` for 7 days; it relies on the existing auto-search, with no polling of its own) and `components/EngineCard.tsx` (Control page).
 
+### 5.5 Phone Game Boost (Android app)
+
+Kotlin files in `android/app/src/main/kotlin/app/rhcs/pulse/`: `GameBoost.kt` (settings, live state, Do Not Disturb save/restore, status JSON), `GameBoostController.kt` (the loop, run by `EngineService` only while the switch is on), `PulseBridge.kt` (the `PulseApp` JavaScript object; answers only for the built-in engine page). The web side is `src/lib/phoneBoost.ts` and `src/components/PhoneBoost.tsx`, shown on the Boost page only when `insideApp()`.
+
+* Game detection: `UsageStatsManager` events (needs Usage access). A package is a game if Android marks it `CATEGORY_GAME` / `FLAG_IS_GAME` or the user ticked it. Launchable apps are made visible with a `<queries>` entry, not `QUERY_ALL_PACKAGES`.
+* Measuring: TCP connect time to 1.1.1.1:443 (3 samples, median) with sockets bound to each `Network` from `registerNetworkCallback`, every 10 s during a game. A switch is suggested after 3 rounds with the other network at least 25 % and 15 ms lower; the notification opens `Settings.Panel.ACTION_INTERNET_CONNECTIVITY`.
+* Weak signal (RSRP at or below -110 dBm): the hint uses `recommendation` from the engine's `/api/towers` only when its status is `better`.
+* Do Not Disturb: only with notification-policy access and only if no DND mode was on. The previous filter is saved first and restored on game end, switch off, service stop and next service start.
+* Wi-Fi low-latency lock (API 29+) and a partial wake lock are best effort and released at session end.
+* Not possible for an app: forcing a tower or network mode, or binding another app's traffic to a network.
+
 ## 6. Network setups that work
 
 The laptop can be on several networks at once. Windows sends internet traffic

@@ -41,7 +41,13 @@ class EngineService : Service() {
     private var superviseJob: Job? = null
     private var begun = false
     private var reporter: SignalReporter? = null
+    private var boost: GameBoostController? = null
     @Volatile private var userStop = false
+
+    override fun onCreate() {
+        super.onCreate()
+        alive = true
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,6 +59,7 @@ class EngineService : Service() {
                 return START_STICKY
             }
             ACTION_QUIT -> {
+                boost?.shutdown()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -69,8 +76,12 @@ class EngineService : Service() {
             // Location listeners must be registered from a thread with a looper: this is the main thread.
             reporter = SignalReporter(applicationContext).also { it.start(scope) }
             LookupWorker(applicationContext).start(scope)
+            boost = GameBoostController(applicationContext).also { it.start(scope) }
         }
-        if (intent?.action == null && !Engine.enabled(this)) {
+        // Game Boost follows its own switch; it does not depend on the engine being on.
+        boost?.sync()
+        val act = intent?.action
+        if ((act == null || act == ACTION_BOOST) && !Engine.enabled(this)) {
             // Android restarted the service after a kill, but the user had switched the engine off.
             Engine.state = "stopped"
             Engine.stoppedByUser = true
@@ -82,6 +93,9 @@ class EngineService : Service() {
     }
 
     override fun onDestroy() {
+        alive = false
+        boost?.shutdown()
+        boost = null
         reporter?.stop()
         userStop = true
         scope.cancel()
@@ -300,6 +314,23 @@ class EngineService : Service() {
         const val ACTION_STOP = "app.rhcs.pulse.STOP"
         const val ACTION_START = "app.rhcs.pulse.START"
         const val ACTION_QUIT = "app.rhcs.pulse.QUIT"
+        const val ACTION_BOOST = "app.rhcs.pulse.BOOST"
+
+        /** True while the service exists. */
+        @Volatile var alive = false
+
+        /**
+         * Tells the service to start or stop Game Boost. Turning it on starts the service when
+         * needed; turning it off only talks to a service that is already running.
+         */
+        fun boostSync(ctx: Context, on: Boolean) {
+            val i = Intent(ctx, EngineService::class.java).setAction(ACTION_BOOST)
+            try {
+                if (on && !alive) androidx.core.content.ContextCompat.startForegroundService(ctx, i)
+                else if (alive) ctx.startService(i)
+            } catch (_: Exception) {
+            }
+        }
 
         /** Starts (or restarts) the engine. */
         fun start(ctx: Context) {

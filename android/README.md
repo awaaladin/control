@@ -26,6 +26,10 @@ Everything stays on the phone. The only data that leaves is the cell look-up: a 
 
 Precise location and phone state (Android shows cell data only to apps that have them), notifications (the engine's notification), foreground service (location + data sync types).
 
+## Phone Game Boost
+
+Off by default; switched on from the Boost page inside the app. While a game is in front (found with Usage access: apps Android marks as games, or ones you tick) it measures Wi-Fi and cellular delay separately every 10 s, suggests the faster one with a one-tap notification button to Android's internet settings, optionally silences notifications (Do Not Disturb access) and holds best-effort Wi-Fi low-latency and wake locks. Everything is restored when the game closes, the switch goes off, or the service restarts. It cannot force a cell tower or network mode, switch networks by itself, or move a game's traffic; those need root or the carrier. Extra permissions: PACKAGE_USAGE_STATS, ACCESS_NOTIFICATION_POLICY, WAKE_LOCK, ACCESS_WIFI_STATE, CHANGE_WIFI_STATE. Untested on hardware at the time of writing.
+
 ## Build (GitHub Actions only)
 
 The app is never built on a laptop. `.github/workflows/build-apk.yml` runs on pushes touching `android/`, `crates/`, `web/`, `Cargo.*` or `.cargo/`: it builds the engine (`cargo build --release --target aarch64-unknown-linux-musl -p rhcsd`) into `jniLibs`, builds PULSE (`npm ci && npm run build`) into `assets/pulse-web`, then runs Gradle and uploads the artifact `app-debug` (also published to the `android-latest` release). The two generated folders are git-ignored.
