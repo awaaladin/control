@@ -24,6 +24,23 @@ android {
         jniLibs { useLegacyPackaging = true }
     }
 
+    // One fixed signing key, so every update installs over the previous one. CI supplies it through
+    // environment variables (from GitHub secrets); without them the build falls back to the temporary
+    // debug key. The key file is never in the repository.
+    val keystoreFile = System.getenv("PULSE_KEYSTORE_FILE")
+    val keystorePassword = System.getenv("PULSE_KEYSTORE_PASSWORD")
+    if (!keystoreFile.isNullOrBlank() && !keystorePassword.isNullOrBlank() && file(keystoreFile).isFile) {
+        signingConfigs {
+            create("pulse") {
+                storeFile = file(keystoreFile)
+                storePassword = keystorePassword
+                keyAlias = "pulse"
+                keyPassword = keystorePassword
+            }
+        }
+        buildTypes.getByName("debug").signingConfig = signingConfigs.getByName("pulse")
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

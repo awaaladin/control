@@ -80,9 +80,22 @@ jobs:
         working-directory: android
         run: chmod +x ./gradlew
 
+      # The fixed signing key (from repository secrets) makes every update install over the last one.
+      # Without the secrets the build still works, signed with a temporary key.
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        env:
+          KEYSTORE_B64: ${{ secrets.PULSE_KEYSTORE_B64 }}
+          PULSE_KEYSTORE_PASSWORD: ${{ secrets.PULSE_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/pulse-release.jks"
+            export PULSE_KEYSTORE_FILE="$RUNNER_TEMP/pulse-release.jks"
+            echo "Signing with the fixed PULSE key"
+          else
+            echo "No fixed key configured: signing with a temporary key (updates will not install over older builds)"
+          fi
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
