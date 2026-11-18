@@ -1,4 +1,4 @@
-import { savedHere } from '../lib/engine';
+import { insideApp, savedHere } from '../lib/engine';
 import { useEffect, useRef, useState } from 'react';
 import { GlowRing } from '../components/GlowRing';
 import { Icon, Switch } from '../components/ui';
@@ -167,7 +167,7 @@ export function AimMode() {
     if (tone) {
       const p = new PitchTone();
       if (!p.start()) {
-        toast('warn', 'Audio unavailable', 'This browser blocked Web Audio.');
+        toast('warn', 'Audio unavailable', insideApp() ? 'This phone blocked the tone.' : 'This browser blocked Web Audio.');
         setTone(false);
         return;
       }

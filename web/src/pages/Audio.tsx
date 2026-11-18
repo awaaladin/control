@@ -1,3 +1,4 @@
+import { insideApp } from '../lib/engine';
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Icon, Panel, Switch } from '../components/ui';
 import { FONT_MONO } from '../lib/chart';
@@ -82,7 +83,7 @@ export function AudioPage() {
 
   const start = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setErr('This browser does not expose a microphone API here. Microphone access needs HTTPS or localhost.');
+      setErr(insideApp() ? 'This phone did not give PULSE a microphone. Check the app’s Microphone permission in Android settings.' : 'This browser does not expose a microphone API here. Microphone access needs HTTPS or localhost.');
       setStatus('error');
       return;
     }
@@ -352,7 +353,7 @@ export function AudioPage() {
     <div className="page page--audio">
       <header className="pagehead">
         <div>
-          <div className="pagehead__kicker">Browser microphone · nothing leaves this device</div>
+          <div className="pagehead__kicker">{insideApp() ? 'Phone microphone' : 'Browser microphone'} · nothing leaves this device</div>
           <h1 className="pagehead__title">Audio</h1>
         </div>
         <div className="pagehead__actions">
@@ -373,14 +374,14 @@ export function AudioPage() {
             </span>
             <div>
               <h2 className="mic-ask__title">
-                {status === 'denied' ? 'Microphone access was blocked' : status === 'error' ? 'Could not open the microphone' : 'Listen through this browser'}
+                {status === 'denied' ? 'Microphone access was blocked' : status === 'error' ? 'Could not open the microphone' : (insideApp() ? 'Listen through this phone' : 'Listen through this browser')}
               </h2>
               <p className="muted">
                 {status === 'denied'
-                  ? 'Allow the microphone for this site in the browser’s address bar, then try again.'
+                  ? (insideApp() ? 'Allow Microphone for PULSE in Android settings (Apps, PULSE, Permissions), then try again.' : 'Allow the microphone for this site in the browser’s address bar, then try again.')
                   : status === 'error'
                     ? err
-                    : 'PULSE analyses the audio locally (spectrum, scope, waterfall and level meter). Nothing is recorded or sent anywhere. Your browser will ask for permission.'}
+                    : 'PULSE analyses the audio locally (spectrum, scope, waterfall and level meter). Nothing is recorded or sent anywhere. ' + (insideApp() ? 'Android will ask for permission.' : 'Your browser will ask for permission.')}
               </p>
               <button type="button" className="btn btn--accent" onClick={() => void start()} disabled={status === 'asking'}>
                 <Icon name="mic" size={18} /> {status === 'asking' ? 'Waiting for permission…' : status === 'idle' ? 'Enable microphone' : 'Try again'}

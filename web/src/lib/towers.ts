@@ -1,3 +1,4 @@
+import { insideApp } from './engine';
 // Tower map data: /api/towers and /api/location.
 
 import { useEffect } from 'react';
@@ -157,14 +158,14 @@ export function useTowersPolling(): void {
 /** Sends this device's position (browser geolocation) as the home location. */
 export function shareThisDeviceLocation(): void {
   if (!('geolocation' in navigator)) {
-    toast('error', 'Location not available', 'This browser has no location support.');
+    toast('error', 'Location not available', insideApp() ? 'This phone did not give PULSE a location. Turn Location on in Android settings.' : 'This browser has no location support.');
     return;
   }
   if (!window.isSecureContext) {
     toast(
       'warn',
-      'Location blocked by the browser',
-      'Browsers only share location with https pages or localhost. Open PULSE on the laptop itself (http://localhost:7878), or set HOME_LAT and HOME_LON in .env.',
+      insideApp() ? 'Location blocked' : 'Location blocked by the browser',
+      insideApp() ? 'Allow Location for PULSE in Android settings (Apps, PULSE, Permissions), then try again.' : 'Browsers only share location with https pages or localhost. Open PULSE on the laptop itself (http://localhost:7878), or set HOME_LAT and HOME_LON in .env.',
       9000,
     );
     return;
@@ -182,7 +183,7 @@ export function shareThisDeviceLocation(): void {
         void refreshTowers();
       } else if (a.status !== 401) toast('error', 'Could not save location', a.message);
     },
-    (err) => toast('error', 'Location not shared', err.message || 'The browser refused to share the location.'),
+    (err) => toast('error', 'Location not shared', err.message || (insideApp() ? 'The phone refused to share the location.' : 'The browser refused to share the location.')),
     { enableHighAccuracy: true, timeout: 20_000, maximumAge: 60_000 },
   );
 }
