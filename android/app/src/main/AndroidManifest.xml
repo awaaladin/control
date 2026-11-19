@@ -23,7 +23,6 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
-    <!-- VPN routing for the chosen game only (off until the user turns it on and accepts Android's VPN dialog). -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <!-- Lets the app see launchable apps (to recognise games) without the broad QUERY_ALL_PACKAGES permission. -->
@@ -61,16 +60,6 @@
             android:name=".EngineService"
             android:exported="false"
             android:foregroundServiceType="location|dataSync" />
-
-        <!-- Per-app game VPN. Android binds it itself (BIND_VPN_SERVICE); only the chosen game is routed through it. -->
-        <service
-            android:name=".PulseVpnService"
-            android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
 
         <!-- Lets the Shizuku app hand PULSE its permission (privileged mode). -->
         <provider

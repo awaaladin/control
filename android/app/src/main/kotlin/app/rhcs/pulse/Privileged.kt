@@ -161,7 +161,6 @@ object Privileged {
         val idle = callIdle(ctx)
         if (idle == false) return "A phone call is in progress."
         if (auto && idle == null) return "PULSE cannot tell whether a call is active."
-        if (PulseVpn.running) return "The game VPN is running."
         return null
     }
 

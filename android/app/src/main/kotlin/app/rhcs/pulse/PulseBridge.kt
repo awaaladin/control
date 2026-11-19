@@ -19,7 +19,6 @@ class PulseBridge(
     private val ctx: Context,
     private val trusted: () -> Boolean,
     private val onMain: (() -> Unit) -> Unit,
-    private val askVpnConsent: () -> Unit = {},
 ) {
     private val denied = JSONObject().put("available", false).toString()
 
@@ -67,13 +66,6 @@ class PulseBridge(
 
     @JavascriptInterface
     fun listApps(): String = if (trusted()) GameBoost.appsJson(ctx) else "[]"
-
-    /** Shows Android's own "connection request" dialog for the VPN (needed once). */
-    @JavascriptInterface
-    fun requestVpnConsent() {
-        if (!trusted()) return
-        onMain { askVpnConsent() }
-    }
 
     /**
      * Privileged mode. [action] is one of a fixed list (request_permission, repick, mobile_only,

@@ -8,7 +8,6 @@ import {
   phoneOpenUsageAccess,
   phoneOpenWifiSettings,
   phonePrivAction,
-  phoneRequestVpnConsent,
   phoneSetEnabled,
   phoneSetGame,
   phoneSetOption,
@@ -18,7 +17,6 @@ import {
   type PhoneBoostStatus,
   type PhoneNet,
   type PhonePriv,
-  type PhoneVpn,
 } from '../lib/phoneBoost';
 import { Badge, Panel, Switch } from './ui';
 import '../styles/extras.css';
@@ -93,53 +91,6 @@ function kb(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-const netLabel = (n: string | null | undefined) => (n === 'wifi' ? 'Wi-Fi' : n === 'cellular' ? 'cellular' : '—');
-
-/** Route-my-game VPN (option A). Off by default; needs Android's one-time VPN dialog. */
-function VpnSection({ v, boostOn }: { v: PhoneVpn | undefined; boostOn: boolean }) {
-  if (!v) return null;
-  return (
-    <div className="phoneboost__opts">
-      <Switch checked={v.wanted} onChange={(on) => phoneSetOption('vpn', on)} label="Route my game over the best network" />
-      <p className="muted small">
-        Off by default. When on, PULSE opens a private VPN on this phone that carries <strong>only the game</strong>; every other app is
-        untouched. PULSE then sends the game&apos;s connections out through Wi-Fi or mobile data, whichever answers faster when the game starts.
-        It does not make any signal stronger. It is a switch, not a booster.
-      </p>
-      <ul className="small muted">
-        <li>
-          The network is chosen once, when the game starts. During a match it only changes if the current one stops answering or is very slow
-          for several checks in a row, and then only <em>new</em> connections move; open ones stay put.
-        </li>
-        <li>
-          Switching in the middle of a match can still drop it: the game server suddenly sees a different address (Wi-Fi and mobile data have
-          different ones), so it may make you reconnect.
-        </li>
-        <li>Only IPv4 traffic and normal game connections (UDP and TCP) are carried. IPv6 and ping (ICMP) of the game are not routed.</li>
-        <li>Safety: if the game sends data and nothing comes back for about 6 seconds, or anything goes wrong, the VPN switches itself off and the game uses the normal network again. It also stops when the game closes, Game Boost is switched off, or the app stops.</li>
-        <li>Untested on many phones: if a game behaves worse with it on, switch this off.</li>
-      </ul>
-      {v.wanted && !v.consent ? (
-        <div className="phoneboost__need">
-          <span>Android must ask you once to allow a VPN for PULSE. PULSE does not look at or keep what goes through it.</span>
-          <button type="button" className="btn btn--small" onClick={phoneRequestVpnConsent}>
-            Allow the VPN
-          </button>
-        </div>
-      ) : null}
-      {v.wanted && !boostOn ? <p className="small">Turn Game Boost on above: the VPN only runs while a game is open.</p> : null}
-      {v.running ? (
-        <p className="g-excellent small">
-          Routing the game over {netLabel(v.network)} now: {v.flows} open connections, {kb(v.tx_bytes)} sent, {kb(v.rx_bytes)} received.
-        </p>
-      ) : null}
-      {v.note ? <p className="small">{v.note}</p> : null}
-      {!v.running && v.stopped_because ? <p className="small">Last stop: {v.stopped_because}</p> : null}
-      {v.error ? <p className="small g-poor">{v.error}</p> : null}
-    </div>
-  );
 }
 
 const SHIZUKU_STEPS: Record<string, string> = {
@@ -354,7 +305,6 @@ export function PhoneBoost() {
         <p className="muted small">Open a game and measuring starts by itself.</p>
       ) : null}
 
-      <VpnSection v={s.vpn} boostOn={on} />
 
       <GamePicker />
 
@@ -364,11 +314,6 @@ export function PhoneBoost() {
         <summary>What it can and cannot do</summary>
         <ul className="small">
           <li>Can: notice a game opening and measure Wi-Fi and cellular delay separately, with a few tiny test connections.</li>
-          <li>
-            Can, if you turn on &quot;Route my game over the best network&quot; and allow Android&apos;s VPN dialog: send only that game&apos;s
-            connections out through the faster of Wi-Fi and mobile data, chosen at game start. New connections can move later if the current
-            network goes bad; open ones stay. The game server then sees the other network&apos;s address, so a live match can still drop.
-          </li>
           <li>Can, with Shizuku: turn Wi-Fi off/on, and ask the modem to register again (airplane mode on for 4 s). Everything is put back afterwards.</li>
           <li>Can: silence notifications and keep Wi-Fi in low-latency mode while the game is in front, and put them back afterwards.</li>
           <li>Can: point to a saved better spot only when PULSE has real data for this place.</li>
@@ -377,7 +322,7 @@ export function PhoneBoost() {
             modem to re-register, which drops every connection for 5 to 10 seconds, so it never does that during a game.
           </li>
           <li>Cannot: make a weak signal stronger. Moving to a better spot is the real fix.</li>
-          <li>Cannot: route IPv6 or ping traffic of the game through the VPN, or speed up a game server that is far away.</li>
+          <li>Cannot: speed up a game server that is far away.</li>
           <li>Wi-Fi low-latency mode is a hint to Android; many phones only honour it when the app is on screen, so it may do nothing for the game.</li>
         </ul>
       </details>

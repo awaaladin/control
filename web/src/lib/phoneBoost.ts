@@ -11,19 +11,6 @@ export interface PhoneNet {
   ms?: number;
 }
 
-export interface PhoneVpn {
-  wanted: boolean;
-  consent: boolean;
-  running: boolean;
-  network: 'wifi' | 'cellular' | null;
-  flows: number;
-  tx_bytes: number;
-  rx_bytes: number;
-  note: string | null;
-  stopped_because: string | null;
-  error: string | null;
-}
-
 export type ShizukuState = 'not_installed' | 'not_running' | 'needs_permission' | 'ready';
 
 export interface PhonePriv {
@@ -56,7 +43,6 @@ export interface PhoneBoostStatus {
   measured_age_s?: number;
   recommendation?: { kind: 'none' | 'stay' | 'switch'; text: string | null };
   hint?: string | null;
-  vpn?: PhoneVpn;
   priv?: PhonePriv;
   cost?: { probe_bytes: number; probes: number; interval_s: number };
   rsrp?: number;
@@ -79,7 +65,6 @@ interface Bridge {
   openUsageAccess(): void;
   openDndAccess(): void;
   openInternetPanel(): void;
-  requestVpnConsent(): void;
   privAction(action: string, confirmed: boolean): string;
   openShizukuDownload(): void;
   openShizuku(): void;
@@ -129,7 +114,7 @@ export function phoneSetEnabled(on: boolean): void {
   bridge()?.setEnabled(on);
   refreshPhoneBoost();
 }
-export function phoneSetOption(name: 'dnd' | 'lowlat' | 'vpn' | 'priv_auto', on: boolean): void {
+export function phoneSetOption(name: 'dnd' | 'lowlat' | 'priv_auto', on: boolean): void {
   bridge()?.setOption(name, on);
   refreshPhoneBoost();
 }
@@ -149,7 +134,6 @@ export function phoneListApps(): PhoneApp[] {
 export const phoneOpenUsageAccess = () => bridge()?.openUsageAccess();
 export const phoneOpenDndAccess = () => bridge()?.openDndAccess();
 export const phoneOpenInternetPanel = () => bridge()?.openInternetPanel();
-export const phoneRequestVpnConsent = () => bridge()?.requestVpnConsent();
 export const phoneOpenShizukuDownload = () => bridge()?.openShizukuDownload();
 export const phoneOpenShizuku = () => bridge()?.openShizuku();
 export const phoneOpenWifiSettings = () => bridge()?.openWifiSettings();
