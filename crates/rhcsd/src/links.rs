@@ -42,6 +42,9 @@ pub struct Adapter {
     pub gateways: Vec<Ipv4Addr>,
     /// Negotiated link speed in Mbit/s (the slower of send and receive), when the OS knows it.
     pub speed_mbps: Option<f64>,
+    /// The OS will not tell us the gateway (Android blocks reading the route table), but a route
+    /// to the internet exists because the address lookup succeeded. Such an adapter still counts.
+    pub route_unknown: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -99,7 +102,7 @@ pub fn classify(adapters: &[Adapter], h: &Hints) -> Vec<Link> {
             continue;
         }
         let gateway = a.gateways.iter().copied().find(|g| !g.is_unspecified());
-        if gateway.is_none() {
+        if gateway.is_none() && !a.route_unknown {
             continue; // no route out: a local-only network
         }
         let ssid = a.ssid.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -249,6 +252,7 @@ pub fn adapters() -> Vec<Adapter> {
                 addrs,
                 gateways,
                 speed_mbps: link_speed_mbps(a.TransmitLinkSpeed, a.ReceiveLinkSpeed),
+                route_unknown: false,
             });
             p = a.Next;
         }
@@ -261,16 +265,18 @@ pub fn adapters() -> Vec<Adapter> {
 #[cfg(not(windows))]
 pub fn adapters() -> Vec<Adapter> {
     let Ok(ip) = netscan::net::local_ip() else { return Vec::new() };
+    let gateways: Vec<Ipv4Addr> = netscan::net::default_gateway().into_iter().collect();
     vec![Adapter {
         if_index: 0,
         ssid: None,
-        alias: "default route".into(),
+        alias: "This phone's connection".into(),
         description: String::new(),
         if_type: 6,
         up: true,
         metric: None,
         addrs: vec![ip],
-        gateways: netscan::net::default_gateway().into_iter().collect(),
+        route_unknown: gateways.is_empty(),
+        gateways,
         speed_mbps: None,
     }]
 }
@@ -445,7 +451,18 @@ mod tests {
             addrs: vec![ip.parse().unwrap()],
             gateways: gw.map(|g| g.parse().unwrap()).into_iter().collect(),
             speed_mbps: None,
+            route_unknown: false,
         }
+    }
+
+    #[test]
+    fn unknown_gateway_still_counts_when_the_os_hides_routes() {
+        let mut a = ad("This phone's connection", "", 6, "10.1.2.3", None);
+        assert!(classify(&[a.clone()], &Hints::default()).is_empty());
+        a.route_unknown = true;
+        let l = classify(&[a], &Hints::default());
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].gateway, None);
     }
 
     #[test]

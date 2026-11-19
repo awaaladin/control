@@ -628,7 +628,7 @@ async fn run_once(s: &Shared, probes: u32) {
         st.links = links.iter().map(|l| result_for(l, &[], &targets, radio_for(l, &i), None)).collect();
         if links.is_empty() {
             st.phase = "error".into();
-            st.error = Some("No internet link found: this computer has no network adapter with a gateway.".into());
+            st.error = Some("No internet link found: there is no working connection (Wi-Fi or mobile data) right now.".into());
         } else if addrs.iter().all(Option::is_none) {
             st.phase = "error".into();
             st.error = Some("None of the test targets could be resolved. Check BOOST_TARGETS in .env (host:port, comma separated).".into());
