@@ -459,8 +459,8 @@ class GameBoostController(context: Context) {
         val pi = PendingIntent.getBroadcast(ctx, 22, send, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val game = GameBoost.gameLabel ?: "your game"
         val now = (if (ms != null) "$ms ms" else "no answer") + (if (rsrp != null) ", signal $rsrp dBm" else "")
-        val detail = "Mobile data is lagging ($now). Tap Switch tower: PULSE turns airplane mode on for about 4 seconds, then off, so the phone picks a tower again. " +
-            "Your connection (and the match) drops for 5 to 10 seconds. The phone chooses the tower, it can be the same one." +
+        val detail = "Mobile data is lagging ($now). Tap Switch tower: PULSE turns airplane mode on for about 2 seconds, then off, so the phone picks a tower again. " +
+            "Your connection (and the match) drops for roughly 3 to 8 seconds. The phone chooses the tower, it can be the same one." +
             (GameBoost.hint?.let { "\n$it" } ?: "")
         val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher)

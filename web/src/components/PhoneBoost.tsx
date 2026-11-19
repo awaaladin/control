@@ -144,7 +144,7 @@ function PrivSection({ p, gameOpen }: { p: PhonePriv | undefined; gameOpen: bool
         <div className="phoneboost__opts">
           <p className="small">
             <strong>Re-pick tower.</strong> Your phone&apos;s modem chooses the tower, not PULSE. This only asks it to register again by
-            switching airplane mode on for 4 seconds and off. It may land on the same tower or a better one. <strong>All connections drop for
+            switching airplane mode on for 2 seconds and off. It may land on the same tower or a better one. <strong>All connections drop for
             5 to 10 seconds</strong> (calls, downloads, games), so it is blocked while a game is open or was open in the last 2 minutes, and
             while a call is active. Never use it during a match.
           </p>
@@ -314,8 +314,8 @@ export function PhoneBoost() {
         <summary>What it can and cannot do</summary>
         <ul className="small">
           <li>Can: notice a game opening and measure Wi-Fi and cellular delay separately, with a few tiny test connections.</li>
-          <li>Can, with Shizuku: turn Wi-Fi off/on, and ask the modem to register again (airplane mode on for 4 s). Everything is put back afterwards.</li>
-          <li>Can, with Shizuku: when mobile data lags for two checks in a row during a game, show a popup with a Switch tower button. Tapping it turns airplane mode on for about 4 s and off again so the phone picks a tower; the connection drops for 5 to 10 s, and it never does this without your tap.</li>
+          <li>Can, with Shizuku: turn Wi-Fi off/on, and ask the modem to register again (airplane mode on for 2 s). Everything is put back afterwards.</li>
+          <li>Can, with Shizuku: when mobile data lags for two checks in a row during a game, show a popup with a Switch tower button. Tapping it turns airplane mode on for about 2 s and off again so the phone picks a tower; the connection drops for about 3 to 8 s, and it never does this without your tap.</li>
           <li>Can: silence notifications and keep Wi-Fi in low-latency mode while the game is in front, and put them back afterwards.</li>
           <li>Can: point to a saved better spot only when PULSE has real data for this place.</li>
           <li>

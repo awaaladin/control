@@ -31,6 +31,9 @@ object Privileged {
         "data_off" to arrayOf("svc", "data", "disable"),
         "airplane_on" to arrayOf("cmd", "connectivity", "airplane-mode", "enable"),
         "airplane_off" to arrayOf("cmd", "connectivity", "airplane-mode", "disable"),
+        // The whole re-pick as ONE shell process: it switches airplane mode back off by itself even if PULSE is
+        // killed halfway, and there is no round trip between the two commands. 2 s is about the shortest the modem needs to drop its tower.
+        "repick_fast" to arrayOf("sh", "-c", "cmd connectivity airplane-mode enable; sleep 2; cmd connectivity airplane-mode disable"),
     )
 
     @Volatile var busy = false
@@ -245,15 +248,14 @@ object Privileged {
     private fun startRepick(app: Context) {
         bg("repick") {
             prefs(app).edit().putBoolean("airplane_changed", true).commit()
-            val on = run("airplane_on")
-            if (!on.first) {
+            val fast = run("repick_fast")
+            if (!fast.first && !airplaneOn(app)) {
                 prefs(app).edit().putBoolean("airplane_changed", false).commit()
-                lastResult = "Could not switch airplane mode on: ${on.second}"
+                lastResult = "Could not switch tower: ${fast.second}"
                 return@bg
             }
-            Thread.sleep(4_000)
-            // Losing the internet is the whole risk, so airplane mode is switched off with several retries.
-            var off = run("airplane_off")
+            // Losing the internet is the whole risk: if airplane mode is still on, switch it off with retries.
+            var off = if (airplaneOn(app)) run("airplane_off") else true to ""
             var tries = 1
             while (!off.first && tries < 4) {
                 Thread.sleep(1_500)
