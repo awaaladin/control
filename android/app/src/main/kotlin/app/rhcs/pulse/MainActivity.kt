@@ -80,6 +80,17 @@ class MainActivity : AppCompatActivity() {
     private var pendingGeo: Pair<String, GeolocationPermissions.Callback>? = null
     private var pendingMic: PermissionRequest? = null
 
+    /** Android's one-time VPN permission dialog (the panel shows the result on its next refresh). */
+    private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+
+    private fun askVpnConsent() {
+        try {
+            val i = android.net.VpnService.prepare(this)
+            if (i != null) vpnConsent.launch(i)
+        } catch (_: Exception) {
+        }
+    }
+
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         pendingGeo?.let { (origin, cb) -> cb.invoke(origin, result.values.any { it }, false) }
         pendingGeo = null
@@ -216,7 +227,7 @@ class MainActivity : AppCompatActivity() {
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) WebView.setWebContentsDebuggingEnabled(true)
 
         web.addJavascriptInterface(
-            PulseBridge(applicationContext, { currentHub == Engine.BASE }, { block -> runOnUiThread { block() } }),
+            PulseBridge(applicationContext, { currentHub == Engine.BASE }, { block -> runOnUiThread { block() } }, { askVpnConsent() }),
             "PulseApp",
         )
 

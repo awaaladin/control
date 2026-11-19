@@ -26,11 +26,21 @@ object GameBoost {
     fun enabled(ctx: Context): Boolean = prefs(ctx).getBoolean("enabled", false)
 
     /** Options "dnd" (silence notifications) and "lowlat" (keep Wi-Fi/CPU awake) default to on, but only act when allowed. */
-    fun option(ctx: Context, name: String): Boolean = prefs(ctx).getBoolean("opt_$name", true)
+    fun option(ctx: Context, name: String, default: Boolean = true): Boolean = prefs(ctx).getBoolean("opt_$name", default)
 
+    /** "vpn" (route the game over the best network) defaults to OFF and needs the user's explicit yes plus Android's VPN dialog. */
     fun setOption(ctx: Context, name: String, on: Boolean) {
-        if (name != "dnd" && name != "lowlat") return
-        prefs(ctx).edit().putBoolean("opt_$name", on).apply()
+        when (name) {
+            "dnd", "lowlat" -> prefs(ctx).edit().putBoolean("opt_$name", on).apply()
+            "vpn" -> {
+                prefs(ctx).edit().putBoolean("opt_vpn", on).commit()
+                if (!on) {
+                    PulseVpn.stop(ctx, null)
+                    vpnNote = null
+                }
+            }
+            "priv_auto" -> Privileged.setAuto(ctx, on)
+        }
     }
 
     fun games(ctx: Context): Set<String> = HashSet(prefs(ctx).getStringSet("games", emptySet()) ?: emptySet())
@@ -149,6 +159,14 @@ object GameBoost {
     @Volatile var wifiLockHeld = false
     @Volatile var wakeLockHeld = false
     @Volatile var measuredAt = 0L
+    @Volatile var vpnNote: String? = null
+
+    /** When a game was last seen in front (not reset with the session): privileged actions stay blocked for a while after. */
+    @Volatile var lastGameSeen = 0L
+
+    /** Estimated data used by measuring since Game Boost was switched on (probe connections, headers included). */
+    @Volatile var probeBytes = 0L
+    @Volatile var probeCount = 0
 
     fun resetLive() {
         game = null
@@ -165,16 +183,23 @@ object GameBoost {
         wifiLockHeld = false
         wakeLockHeld = false
         measuredAt = 0L
+        vpnNote = null
     }
 
     /** Turns Game Boost on or off. Off restores everything it changed straight away. */
     fun setEnabled(ctx: Context, on: Boolean) {
         prefs(ctx).edit().putBoolean("enabled", on).commit()
         if (on) {
+            probeBytes = 0L
+            probeCount = 0
             EngineService.boostSync(ctx, true)
         } else {
             resetLive()
             restoreDnd(ctx)
+            PulseVpn.stop(ctx, null)
+            Privileged.restoreAllAsync(ctx)
+            probeBytes = 0L
+            probeCount = 0
             EngineService.boostSync(ctx, false)
         }
     }
@@ -204,6 +229,9 @@ object GameBoost {
         o.put("wake_lock", wakeLockHeld)
         o.put("low_latency_api", Build.VERSION.SDK_INT >= 29)
         o.put("service_alive", EngineService.alive)
+        o.put("vpn", PulseVpn.json(ctx))
+        o.put("priv", Privileged.json(ctx))
+        o.put("cost", JSONObject().put("probe_bytes", probeBytes).put("probes", probeCount).put("interval_s", GameBoostController.MEASURE_EVERY_S))
         if (g != null) o.put("game", JSONObject().put("pkg", g).put("label", gameLabel ?: g))
         val nets = JSONObject()
         nets.put("wifi", net(wifiUp, wifiMs, active == "wifi"))

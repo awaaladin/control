@@ -11,6 +11,32 @@ export interface PhoneNet {
   ms?: number;
 }
 
+export interface PhoneVpn {
+  wanted: boolean;
+  consent: boolean;
+  running: boolean;
+  network: 'wifi' | 'cellular' | null;
+  flows: number;
+  tx_bytes: number;
+  rx_bytes: number;
+  note: string | null;
+  stopped_because: string | null;
+  error: string | null;
+}
+
+export type ShizukuState = 'not_installed' | 'not_running' | 'needs_permission' | 'ready';
+
+export interface PhonePriv {
+  state: ShizukuState;
+  denied_forever: boolean;
+  auto: boolean;
+  busy: boolean;
+  last: string | null;
+  wifi_off_by_us: boolean;
+  airplane_pending: boolean;
+  repick_blocked: string | null;
+}
+
 export interface PhoneBoostStatus {
   available: boolean;
   sdk?: number;
@@ -30,6 +56,9 @@ export interface PhoneBoostStatus {
   measured_age_s?: number;
   recommendation?: { kind: 'none' | 'stay' | 'switch'; text: string | null };
   hint?: string | null;
+  vpn?: PhoneVpn;
+  priv?: PhonePriv;
+  cost?: { probe_bytes: number; probes: number; interval_s: number };
   rsrp?: number;
   games?: string[];
 }
@@ -50,6 +79,11 @@ interface Bridge {
   openUsageAccess(): void;
   openDndAccess(): void;
   openInternetPanel(): void;
+  requestVpnConsent(): void;
+  privAction(action: string, confirmed: boolean): string;
+  openShizukuDownload(): void;
+  openShizuku(): void;
+  openWifiSettings(): void;
 }
 
 declare global {
@@ -95,7 +129,7 @@ export function phoneSetEnabled(on: boolean): void {
   bridge()?.setEnabled(on);
   refreshPhoneBoost();
 }
-export function phoneSetOption(name: 'dnd' | 'lowlat', on: boolean): void {
+export function phoneSetOption(name: 'dnd' | 'lowlat' | 'vpn' | 'priv_auto', on: boolean): void {
   bridge()?.setOption(name, on);
   refreshPhoneBoost();
 }
@@ -115,3 +149,20 @@ export function phoneListApps(): PhoneApp[] {
 export const phoneOpenUsageAccess = () => bridge()?.openUsageAccess();
 export const phoneOpenDndAccess = () => bridge()?.openDndAccess();
 export const phoneOpenInternetPanel = () => bridge()?.openInternetPanel();
+export const phoneRequestVpnConsent = () => bridge()?.requestVpnConsent();
+export const phoneOpenShizukuDownload = () => bridge()?.openShizukuDownload();
+export const phoneOpenShizuku = () => bridge()?.openShizuku();
+export const phoneOpenWifiSettings = () => bridge()?.openWifiSettings();
+
+/** Privileged actions: a fixed list of names, never a command. Returns the app's plain-language answer. */
+export function phonePrivAction(action: 'request_permission' | 'repick' | 'mobile_only' | 'wifi_back', confirmed = false): { ok: boolean; message: string } {
+  const b = bridge();
+  if (!b) return { ok: false, message: 'Not running inside the app.' };
+  try {
+    const r = JSON.parse(b.privAction(action, confirmed)) as { ok?: boolean; message?: string };
+    refreshPhoneBoost();
+    return { ok: !!r.ok, message: String(r.message ?? '') };
+  } catch {
+    return { ok: false, message: 'The app did not answer.' };
+  }
+}

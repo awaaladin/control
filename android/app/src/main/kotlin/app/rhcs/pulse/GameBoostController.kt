@@ -13,7 +13,6 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Build
-import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -33,9 +32,11 @@ import java.net.Socket
  * Game Boost switched on; polls nothing when it is off.
  *
  * While a game is in the foreground it measures TCP connect time to 1.1.1.1:443 separately over
- * Wi-Fi and over cellular (sockets bound to each Network), decides with hysteresis, and posts a
- * notification with a one-tap button to the system's internet panel. It cannot move the game's
- * traffic itself, force a cell tower or change the carrier's network mode.
+ * Wi-Fi and over cellular (sockets bound to each Network, 2 tiny connects every 15 s), decides with
+ * hysteresis, and posts a notification with a one-tap button to the system's internet panel.
+ * Optionally (user's switch, Android's VPN dialog accepted) it routes the game's traffic over the
+ * chosen network with [PulseVpn]. It cannot force a cell tower or change the carrier's network mode;
+ * with Shizuku ([Privileged]) it can only ask the modem to register again, never while gaming.
  */
 class GameBoostController(context: Context) {
 
@@ -48,7 +49,6 @@ class GameBoostController(context: Context) {
     private var wifiCb: ConnectivityManager.NetworkCallback? = null
     private var cellCb: ConnectivityManager.NetworkCallback? = null
     private var wifiLock: WifiManager.WifiLock? = null
-    private var wake: PowerManager.WakeLock? = null
 
     private var lastEventTs = 0L
     private var fgPkg: String? = null
@@ -56,10 +56,18 @@ class GameBoostController(context: Context) {
     private var lastNotify = 0L
     private var notified = false
 
+    // game VPN decisions (per game session)
+    private var vpnStreak = 0
+    private var vpnDecidedAtStart = false
+    private var vpnEverStarted = false
+    private var vpnBlocked = false
+
     /** Called once when the service starts: undo anything a crashed earlier run left behind. */
     fun start(scope: CoroutineScope) {
         this.scope = scope
         GameBoost.restoreDnd(ctx)
+        PulseVpn.stop(ctx, null) // a VPN from a crashed earlier run must not linger
+        Privileged.restoreAllAsync(ctx)
     }
 
     /** Starts or stops the loop to match the user's switch. Cheap; called on every service command. */
@@ -92,6 +100,8 @@ class GameBoostController(context: Context) {
             while (isActive) {
                 val pkg = if (GameBoost.hasUsageAccess(ctx)) pollForeground() else null
                 val gamePkg = pkg?.takeIf { isGame(it) }
+                if (gamePkg != null) GameBoost.lastGameSeen = System.currentTimeMillis()
+                PulseVpn.lastBeat = System.currentTimeMillis()
                 if (gamePkg != current) {
                     if (current != null) endSession()
                     current = gamePkg
@@ -102,11 +112,12 @@ class GameBoostController(context: Context) {
                     }
                 }
                 val now = System.currentTimeMillis()
-                if (current != null && now - lastMeasure >= 10_000L) {
+                if (current != null && now - lastMeasure >= MEASURE_EVERY_S * 1000L) {
                     lastMeasure = now
                     measureRound()
                 }
-                delay(3_000)
+                if (current == null && Privileged.autoEnabled(ctx)) Privileged.autoTick(ctx, activeTransport() == "cellular")
+                delay(if (current != null) 3_000 else 5_000)
             }
         } finally {
             cleanup()
@@ -149,12 +160,17 @@ class GameBoostController(context: Context) {
         GameBoost.recText = "Measuring…"
         streak = 0
         notified = false
+        vpnStreak = 0
+        vpnDecidedAtStart = false
+        vpnEverStarted = false
+        vpnBlocked = false
         registerCallbacks()
         if (GameBoost.option(ctx, "dnd")) GameBoost.dndActive = GameBoost.applyDnd(ctx)
-        if (GameBoost.option(ctx, "lowlat")) acquireLocks()
     }
 
     private fun endSession() {
+        PulseVpn.stop(ctx, null)
+        Privileged.restoreAllAsync(ctx)
         releaseLocks()
         GameBoost.restoreDnd(ctx)
         unregisterCallbacks()
@@ -167,6 +183,8 @@ class GameBoostController(context: Context) {
     /** Idempotent: restores everything this feature changed. */
     @Synchronized
     private fun cleanup() {
+        PulseVpn.stop(ctx, null)
+        Privileged.restoreAllAsync(ctx)
         releaseLocks()
         GameBoost.restoreDnd(ctx)
         unregisterCallbacks()
@@ -174,39 +192,34 @@ class GameBoostController(context: Context) {
         GameBoost.resetLive()
     }
 
-    // ------------------------------------------------------------------ locks (best effort)
+    // ------------------------------------------------------------------ Wi-Fi low-latency lock (best effort)
 
-    private fun acquireLocks() {
-        try {
-            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
-            val w = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pulse:gameboost")
-            w.setReferenceCounted(false)
-            w.acquire(2 * 60 * 60 * 1000L)
-            wake = w
-            GameBoost.wakeLockHeld = true
-        } catch (_: Exception) {
-        }
-        try {
-            val wm = ctx.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            if (wm.isWifiEnabled) {
-                @Suppress("DEPRECATION")
-                val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
-                val l = wm.createWifiLock(mode, "pulse:gameboost")
-                l.setReferenceCounted(false)
-                l.acquire()
-                wifiLock = l
-                GameBoost.wifiLockHeld = true
+    /**
+     * Held only while a game is in the FOREGROUND (a session exists only then) and the game's traffic
+     * is on Wi-Fi. No CPU wake lock: the screen is on while you play, and a held wake lock only costs battery.
+     */
+    private fun updateWifiLock(wifiInUse: Boolean) {
+        val want = wifiInUse && GameBoost.option(ctx, "lowlat")
+        if (want && wifiLock == null) {
+            try {
+                val wm = ctx.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                if (wm.isWifiEnabled) {
+                    @Suppress("DEPRECATION")
+                    val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                    val l = wm.createWifiLock(mode, "pulse:gameboost")
+                    l.setReferenceCounted(false)
+                    l.acquire()
+                    wifiLock = l
+                    GameBoost.wifiLockHeld = true
+                }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
+        } else if (!want && wifiLock != null) {
+            releaseLocks()
         }
     }
 
     private fun releaseLocks() {
-        try {
-            wake?.let { if (it.isHeld) it.release() }
-        } catch (_: Exception) {
-        }
-        wake = null
         try {
             wifiLock?.let { if (it.isHeld) it.release() }
         } catch (_: Exception) {
@@ -298,15 +311,20 @@ class GameBoostController(context: Context) {
         }
     }
 
-    /** Median TCP connect time (ms) of 3 tries to 1.1.1.1:443 through this network; null when fewer than 2 worked. */
-    private fun tcpMedian(net: Network): Int? {
+    /**
+     * Average TCP connect time (ms) of 2 tiny connects to 1.1.1.1:443 through this network; null when
+     * none worked. The socket is closed with a reset right after the handshake (no data is sent), so a
+     * try costs roughly 200 to 300 bytes. Counted in the "Boost cost" line.
+     */
+    private suspend fun tcpProbe(net: Network): Int? {
         val ms = ArrayList<Int>()
-        repeat(3) {
+        repeat(2) { i ->
             var s: Socket? = null
             try {
                 s = net.socketFactory.createSocket()
+                s.setSoLinger(true, 0)
                 val t0 = System.nanoTime()
-                s.connect(InetSocketAddress("1.1.1.1", 443), 2_500)
+                s.connect(InetSocketAddress("1.1.1.1", 443), 2_000)
                 ms.add(((System.nanoTime() - t0) / 1_000_000L).toInt())
             } catch (_: Exception) {
             } finally {
@@ -314,12 +332,13 @@ class GameBoostController(context: Context) {
                     s?.close()
                 } catch (_: Exception) {
                 }
+                GameBoost.probeBytes += PROBE_BYTES
+                GameBoost.probeCount += 1
             }
-            Thread.sleep(120)
+            if (i == 0) delay(150)
         }
-        if (ms.size < 2) return null
-        ms.sort()
-        return ms[ms.size / 2]
+        if (ms.isEmpty()) return null
+        return ms.sum() / ms.size
     }
 
     // ------------------------------------------------------------------ one measuring round
@@ -328,8 +347,8 @@ class GameBoostController(context: Context) {
         val w = wifiNet
         val c = cellNet
         val (wm, cmm) = coroutineScope {
-            val a = async { if (w != null) tcpMedian(w) else null }
-            val b = async { if (c != null) tcpMedian(c) else null }
+            val a = async { if (w != null) tcpProbe(w) else null }
+            val b = async { if (c != null) tcpProbe(c) else null }
             a.await() to b.await()
         }
         GameBoost.wifiMs = wm
@@ -377,6 +396,94 @@ class GameBoostController(context: Context) {
             }
         }
         updateHint(active)
+        try {
+            routeStep(w, c, wm, cmm, active)
+        } catch (e: Exception) {
+            GameBoost.vpnNote = "Routing check failed: ${e.javaClass.simpleName}"
+        }
+        updateWifiLock(if (PulseVpn.running) PulseVpn.netName == "wifi" else active == "wifi")
+    }
+
+    // ------------------------------------------------------------------ game VPN decisions
+
+    private fun clearlyBetter(curMs: Int?, otherMs: Int): Boolean =
+        curMs == null || (otherMs <= curMs * 0.75 && curMs - otherMs >= 15)
+
+    private fun routeStep(w: Network?, c: Network?, wm: Int?, cmm: Int?, active: String?) {
+        if (!GameBoost.option(ctx, "vpn", false)) {
+            GameBoost.vpnNote = null
+            return
+        }
+        val pkg = GameBoost.game ?: return
+        if (!PulseVpn.consentGranted(ctx)) {
+            GameBoost.vpnNote = "Android's VPN permission has not been given yet. Use the button in the panel."
+            return
+        }
+        if (vpnEverStarted && !PulseVpn.running) {
+            // The kill switch (or Android) ended it: stay off for the rest of this game.
+            vpnBlocked = true
+            vpnEverStarted = false
+        }
+        if (vpnBlocked) {
+            GameBoost.vpnNote = "Routing was switched off for this game: ${PulseVpn.killReason ?: PulseVpn.lastError ?: "the VPN ended"}. Your game uses the normal network again."
+            return
+        }
+        val wOk = w != null && wm != null
+        val cOk = c != null && cmm != null
+        val cur: String? = if (PulseVpn.running) PulseVpn.netName else active
+        if (cur == null) return
+        val curMs = if (cur == "wifi") wm else cmm
+        val other = if (cur == "wifi") "cellular" else "wifi"
+        val otherNet = if (other == "wifi") w else c
+        val otherMs = if (other == "wifi") wm else cmm
+        val otherOk = if (other == "wifi") wOk else cOk
+        val otherLabel = if (other == "wifi") "Wi-Fi" else "Cellular"
+        val curLabel = if (cur == "wifi") "Wi-Fi" else "Cellular"
+
+        if (!vpnDecidedAtStart) {
+            vpnDecidedAtStart = true
+            if (otherNet != null && otherOk && otherMs != null && clearlyBetter(curMs, otherMs)) {
+                startVpn(pkg, otherNet, other, "$otherLabel is clearly faster at game start ($otherMs ms against ${curMs ?: "no answer"} ms on $curLabel).")
+            } else {
+                GameBoost.vpnNote = "Your phone's current network ($curLabel) is already the best choice, so nothing is routed."
+            }
+            return
+        }
+        if (otherNet == null || !otherOk || otherMs == null || !clearlyBetter(curMs, otherMs)) {
+            vpnStreak = 0
+            if (PulseVpn.running) GameBoost.vpnNote = "Routing ${GameBoost.gameLabel ?: "the game"} over ${if (PulseVpn.netName == "wifi") "Wi-Fi" else "cellular"}. ${PulseVpn.flows.get()} connections open."
+            return
+        }
+        // Mid-game switches are rare on purpose: switching shows the game server a new address.
+        val dead = curMs == null
+        val veryPoor = curMs != null && curMs >= 200
+        if (!dead && !veryPoor) {
+            vpnStreak = 0
+            return
+        }
+        vpnStreak++
+        val need = if (dead) 1 else 3
+        if (vpnStreak < need) {
+            GameBoost.vpnNote = "$curLabel looks poor. Checking again before switching mid-game ($vpnStreak of $need)."
+            return
+        }
+        vpnStreak = 0
+        if (PulseVpn.running) {
+            PulseVpn.switchNetwork(otherNet, other)
+            GameBoost.vpnNote = "$curLabel was ${if (dead) "not answering" else "very slow"}, so NEW connections now use $otherLabel. Open connections stay where they are (the match may reconnect)."
+        } else {
+            startVpn(pkg, otherNet, other, "$curLabel was ${if (dead) "not answering" else "very slow"}, so the game now goes over $otherLabel (the match may reconnect).")
+        }
+    }
+
+    private fun startVpn(pkg: String, net: Network, name: String, why: String) {
+        if (PulseVpn.start(ctx, pkg, net, name)) {
+            vpnEverStarted = true
+            GameBoost.vpnNote = why
+        } else {
+            vpnBlocked = true
+            GameBoost.vpnNote = PulseVpn.lastError ?: "The VPN could not start."
+        }
     }
 
     /** If the signal is poor, point at a better spot, but only when the engine's own data says there is one. */
@@ -444,5 +551,7 @@ class GameBoostController(context: Context) {
     companion object {
         private const val CHANNEL = "gameboost"
         private const val NOTIF_ID = 7880
+        const val MEASURE_EVERY_S = 15
+        private const val PROBE_BYTES = 260L
     }
 }
