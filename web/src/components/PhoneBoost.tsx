@@ -315,6 +315,7 @@ export function PhoneBoost() {
         <ul className="small">
           <li>Can: notice a game opening and measure Wi-Fi and cellular delay separately, with a few tiny test connections.</li>
           <li>Can, with Shizuku: turn Wi-Fi off/on, and ask the modem to register again (airplane mode on for 4 s). Everything is put back afterwards.</li>
+          <li>Can, with Shizuku: when mobile data lags for two checks in a row during a game, show a popup with a Switch tower button. Tapping it turns airplane mode on for about 4 s and off again so the phone picks a tower; the connection drops for 5 to 10 s, and it never does this without your tap.</li>
           <li>Can: silence notifications and keep Wi-Fi in low-latency mode while the game is in front, and put them back afterwards.</li>
           <li>Can: point to a saved better spot only when PULSE has real data for this place.</li>
           <li>

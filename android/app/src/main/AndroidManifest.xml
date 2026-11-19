@@ -61,6 +61,11 @@
             android:exported="false"
             android:foregroundServiceType="location|dataSync" />
 
+        <!-- The "Switch tower" button on the lag popup (only this app can send to it). -->
+        <receiver
+            android:name=".TowerSwitchReceiver"
+            android:exported="false" />
+
         <!-- Lets the Shizuku app hand PULSE its permission (privileged mode). -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

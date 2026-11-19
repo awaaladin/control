@@ -37,6 +37,11 @@ object Privileged {
     @Volatile var lastResult: String? = null
     private var poorSince = 0L
 
+    /** What the connection looked like when the lag popup was shown, to compare after the re-pick. */
+    @Volatile var beforeMs: Int? = null
+    @Volatile var beforeRsrp: Int? = null
+    @Volatile var repickDoneAt = 0L
+
     private fun prefs(ctx: Context) = GameBoost.prefs(ctx)
 
     fun autoEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean("priv_auto", false)
@@ -151,10 +156,10 @@ object Privileged {
     }
 
     /** Why a tower re-pick must not run right now, or null when it may. */
-    fun repickBlock(ctx: Context, auto: Boolean): String? {
+    fun repickBlock(ctx: Context, auto: Boolean, allowGame: Boolean = false): String? {
         if (state(ctx) != "ready") return "Privileged mode is not ready."
         if (busy) return "Another privileged action is still running."
-        if (GameBoost.game != null || System.currentTimeMillis() - GameBoost.lastGameSeen < GAME_QUIET_MS) {
+        if (!allowGame && (GameBoost.game != null || System.currentTimeMillis() - GameBoost.lastGameSeen < GAME_QUIET_MS)) {
             return "A game is open or was open a moment ago. Re-picking drops ALL connections for 5 to 10 seconds, so it is blocked while gaming."
         }
         if (airplaneOn(ctx)) return "Airplane mode is already on."
@@ -162,6 +167,21 @@ object Privileged {
         if (idle == false) return "A phone call is in progress."
         if (auto && idle == null) return "PULSE cannot tell whether a call is active."
         return null
+    }
+
+    /**
+     * The person tapped "Switch tower" on the lag popup: that tap is the confirmation, so this may run
+     * while a game is open. Still refused during a phone call. Returns a short message for the user.
+     */
+    fun repickFromPopup(ctx: Context): String {
+        val app = ctx.applicationContext
+        val why = repickBlock(app, false, allowGame = true)
+        if (why != null) {
+            lastResult = why
+            return why
+        }
+        startRepick(app)
+        return "Switching tower: connection drops for about 5 to 10 seconds."
     }
 
     // ------------------------------------------------------------------ actions (named, never raw commands)
@@ -232,9 +252,18 @@ object Privileged {
                 return@bg
             }
             Thread.sleep(4_000)
+            // Losing the internet is the whole risk, so airplane mode is switched off with several retries.
             var off = run("airplane_off")
-            if (!off.first) off = run("airplane_off")
-            if (off.first) prefs(app).edit().putBoolean("airplane_changed", false).commit()
+            var tries = 1
+            while (!off.first && tries < 4) {
+                Thread.sleep(1_500)
+                off = run("airplane_off")
+                tries++
+            }
+            if (off.first || !airplaneOn(app)) {
+                prefs(app).edit().putBoolean("airplane_changed", false).commit()
+                repickDoneAt = System.currentTimeMillis()
+            }
             lastResult = if (off.first) "Re-pick done at ${java.text.DateFormat.getTimeInstance().format(java.util.Date())}. The phone chose a tower again; it may be the same one." else "Airplane mode may still be ON. Turn it off in the quick settings. (${off.second})"
         }
     }

@@ -151,6 +151,7 @@ class GameBoostController(context: Context) {
         GameBoost.recText = "Measuring…"
         streak = 0
         notified = false
+        lagStreak = 0
         registerCallbacks()
         if (GameBoost.option(ctx, "dnd")) GameBoost.dndActive = GameBoost.applyDnd(ctx)
     }
@@ -382,6 +383,7 @@ class GameBoostController(context: Context) {
         }
         updateHint(active)
         updateWifiLock(active == "wifi")
+        towerStep(active, activeMs, otherMs)
     }
 
     /** If the signal is poor, point at a better spot, but only when the engine's own data says there is one. */
@@ -403,6 +405,79 @@ class GameBoostController(context: Context) {
             }
         }
         GameBoost.hint = if (msg != null) "Signal is weak ($rsrp dBm). $msg" else "Signal is weak ($rsrp dBm), but PULSE has no saved better spot or tower for here yet."
+    }
+
+    // ------------------------------------------------------------------ tower lag popup
+
+    private var lagStreak = 0
+    private var lastTowerPopup = 0L
+
+    /**
+     * Mobile data is the active network, the game is lagging (no answer or slow, or a very weak signal)
+     * for two rounds in a row, Wi-Fi is not a better option, and Privileged mode is ready: show a popup
+     * whose "Switch tower" button toggles airplane mode so the phone registers on a tower again.
+     * PULSE cannot choose the tower; the modem does. It only ever asks, never switches by itself in a game.
+     */
+    private fun towerStep(active: String?, activeMs: Int?, otherMs: Int?) {
+        if (active != "cellular" || GameBoost.game == null || Privileged.state(ctx) != "ready") {
+            lagStreak = 0
+            return
+        }
+        val rsrp = Engine.lastRsrp?.takeIf { System.currentTimeMillis() - Engine.lastRsrpAt < 30_000L }
+        val slow = activeMs == null || activeMs >= LAG_MS
+        val weak = rsrp != null && rsrp <= -108
+        val wifiBetter = otherMs != null && (activeMs == null || otherMs < activeMs * 0.75)
+        if ((!slow && !weak) || wifiBetter) {
+            lagStreak = 0
+            return
+        }
+        lagStreak++
+        // Right after a re-pick, report whether it helped.
+        if (Privileged.repickDoneAt > 0L && System.currentTimeMillis() - Privileged.repickDoneAt > 6_000L) {
+            val b = Privileged.beforeMs
+            Privileged.lastResult = "After switching tower: ${activeMs?.let { "$it ms" } ?: "no answer"} (before: ${b?.let { "$it ms" } ?: "no answer"})" +
+                (rsrp?.let { ", signal $it dBm" } ?: "") + ". The phone picks the tower; it can be the same one."
+            Privileged.repickDoneAt = 0L
+        }
+        if (lagStreak < 2) return
+        val now = System.currentTimeMillis()
+        if (now - lastTowerPopup < 3 * 60_000L || Privileged.busy) return
+        if (Privileged.repickBlock(ctx, false, allowGame = true) != null) return
+        lastTowerPopup = now
+        Privileged.beforeMs = activeMs
+        Privileged.beforeRsrp = rsrp
+        notifyTower(activeMs, rsrp)
+    }
+
+    private fun notifyTower(ms: Int?, rsrp: Int?) {
+        if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(NotificationChannel(TOWER_CHANNEL, "Game Boost: switch tower", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val send = Intent(ctx, TowerSwitchReceiver::class.java).setAction(TowerSwitchReceiver.ACTION)
+        val pi = PendingIntent.getBroadcast(ctx, 22, send, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val game = GameBoost.gameLabel ?: "your game"
+        val now = (if (ms != null) "$ms ms" else "no answer") + (if (rsrp != null) ", signal $rsrp dBm" else "")
+        val detail = "Mobile data is lagging ($now). Tap Switch tower: PULSE turns airplane mode on for about 4 seconds, then off, so the phone picks a tower again. " +
+            "Your connection (and the match) drops for 5 to 10 seconds. The phone chooses the tower, it can be the same one." +
+            (GameBoost.hint?.let { "\n$it" } ?: "")
+        val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle("Lag in $game: switch tower?")
+            .setContentText("Mobile data is lagging ($now). Tap to re-pick the tower.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // Alarm category so this one still shows when PULSE has put Do Not Disturb on for the game.
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .addAction(0, "Switch tower", pi)
+            .build()
+        try {
+            nm.notify(TOWER_NOTIF_ID, n)
+        } catch (_: SecurityException) {
+        }
     }
 
     // ------------------------------------------------------------------ notification
@@ -441,7 +516,9 @@ class GameBoostController(context: Context) {
 
     private fun cancelNotification() {
         try {
-            (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID)
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIF_ID)
+            nm.cancel(TOWER_NOTIF_ID)
         } catch (_: Exception) {
         }
     }
@@ -449,6 +526,9 @@ class GameBoostController(context: Context) {
     companion object {
         private const val CHANNEL = "gameboost"
         private const val NOTIF_ID = 7880
+        private const val TOWER_CHANNEL = "gameboost_tower"
+        private const val TOWER_NOTIF_ID = 7881
+        private const val LAG_MS = 150
         const val MEASURE_EVERY_S = 15
         private const val PROBE_BYTES = 260L
     }
