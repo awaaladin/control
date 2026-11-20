@@ -76,6 +76,7 @@ class EngineService : Service() {
             // Location listeners must be registered from a thread with a looper: this is the main thread.
             reporter = SignalReporter(applicationContext).also { it.start(scope) }
             LookupWorker(applicationContext).start(scope)
+            startMeter()
             boost = GameBoostController(applicationContext).also { it.start(scope) }
         }
         // Game Boost follows its own switch; it does not depend on the engine being on.
@@ -134,6 +135,30 @@ class EngineService : Service() {
         goForeground("Stopped by you", running = false)
     }
 
+    // ------------------------------------------------------------------ notification meter
+
+    private var lastMeterText = ""
+
+    /** Refreshes the pull-down meter every 5 s, only when what it shows has changed. Costs no data. */
+    private fun startMeter() {
+        scope.launch {
+            while (isActive) {
+                delay(5_000)
+                if (Engine.state != "running") continue
+                try {
+                    Meter.record()
+                    val v = Meter.view(this@EngineService)
+                    val key = v.title + v.line + v.detail + v.percent
+                    if (key != lastMeterText) {
+                        lastMeterText = key
+                        goForeground("Reading this phone's signal", running = true)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ foreground notification
 
     private fun goForeground(text: String, running: Boolean) {
@@ -156,14 +181,22 @@ class EngineService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
         }
-        val n: Notification = NotificationCompat.Builder(this, CHANNEL)
+        val meter = if (running && Engine.state == "running") Meter.view(this) else null
+        val b = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(if (running) "PULSE engine is on" else "PULSE engine is off")
-            .setContentText(if (running) "$text. Everything stays on this phone." else text)
+            .setContentTitle(meter?.title ?: if (running) "PULSE engine is on" else "PULSE engine is off")
+            .setContentText(meter?.line ?: if (running) "$text. Everything stays on this phone." else text)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSubText("PULSE")
             .setContentIntent(open)
             .addAction(0, if (running) "Stop" else "Start", action)
-            .build()
+        if (meter != null) {
+            // The bar fills with signal strength; the expanded text lists the details.
+            b.setProgress(100, meter.percent, false)
+            b.setStyle(NotificationCompat.BigTextStyle().bigText(meter.detail))
+        }
+        val n: Notification = b.build()
         try {
             if (Build.VERSION.SDK_INT >= 29) {
                 var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC

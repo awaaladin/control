@@ -134,6 +134,7 @@ class SignalReporter(private val ctx: Context) {
                 val body = buildPush(model)
                 Engine.lastRsrp = if (body.has("rsrp")) body.optInt("rsrp") else null
                 Engine.lastRsrpAt = System.currentTimeMillis()
+                Engine.lastNetType = body.optString("network_type").takeIf { it.isNotBlank() }
                 val r = Engine.call(ctx, "POST", "/api/phone/push", body.toString())
                 if (r != null && r.first !in 200..299) {
                     Engine.reporterNote = "The engine refused a reading: ${r.second.take(120)}"

@@ -24,6 +24,8 @@ object Engine {
     /** The serving cell's latest RSRP (dBm) as read by the reporter; null when unknown. Used by Game Boost. */
     @Volatile var lastRsrp: Int? = null
     @Volatile var lastRsrpAt: Long = 0L
+    /** "LTE", "5G" ...: shown in the notification meter. */
+    @Volatile var lastNetType: String? = null
     /** The user (or the Stop button in PULSE) ended the engine: it is not restarted until Start. */
     @Volatile var stoppedByUser: Boolean = false
 

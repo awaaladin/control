@@ -21,6 +21,11 @@ pub async fn run(s: Shared) {
     let mut first = true;
 
     loop {
+        // On the phone the sweep (hundreds of probe packets, possibly over the carrier's network) only runs
+        // when the person presses Scan: it used mobile data and made a weak connection worse.
+        if s.cfg.app_mode {
+            s.scan_now.notified().await;
+        }
         // Game Boost for the PC is on: no scans (they add traffic) until it is restored.
         while crate::devboost::scans_paused() {
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -95,9 +100,11 @@ pub async fn run(s: Shared) {
             if networks.is_empty() { "no networks".into() } else { networks.join(", ") }
         );
 
-        tokio::select! {
-            _ = s.scan_now.notified() => {}
-            _ = tokio::time::sleep(Duration::from_secs(s.cfg.scan_interval_s.max(30))) => {}
+        if !s.cfg.app_mode {
+            tokio::select! {
+                _ = s.scan_now.notified() => {}
+                _ = tokio::time::sleep(Duration::from_secs(s.cfg.scan_interval_s.max(30))) => {}
+            }
         }
     }
 }

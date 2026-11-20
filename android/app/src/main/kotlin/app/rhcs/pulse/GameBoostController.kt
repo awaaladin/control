@@ -305,6 +305,7 @@ class GameBoostController(context: Context) {
     private suspend fun tcpProbe(net: Network): Int? {
         val ms = ArrayList<Int>()
         repeat(2) { i ->
+            if (i == 1 && ms.isNotEmpty()) return@repeat // one good answer is enough; a second connect only after a failure
             var s: Socket? = null
             try {
                 s = net.socketFactory.createSocket()
@@ -321,7 +322,7 @@ class GameBoostController(context: Context) {
                 GameBoost.probeBytes += PROBE_BYTES
                 GameBoost.probeCount += 1
             }
-            if (i == 0) delay(150)
+            if (i == 0 && ms.isEmpty()) delay(150)
         }
         if (ms.isEmpty()) return null
         return ms.sum() / ms.size
@@ -419,10 +420,11 @@ class GameBoostController(context: Context) {
      * PULSE cannot choose the tower; the modem does. It only ever asks, never switches by itself in a game.
      */
     private fun towerStep(active: String?, activeMs: Int?, otherMs: Int?) {
-        if (active != "cellular" || GameBoost.game == null || Privileged.state(ctx) != "ready") {
+        if (active != "cellular" || GameBoost.game == null) {
             lagStreak = 0
             return
         }
+        val ready = Privileged.state(ctx) == "ready"
         val rsrp = Engine.lastRsrp?.takeIf { System.currentTimeMillis() - Engine.lastRsrpAt < 30_000L }
         val slow = activeMs == null || activeMs >= LAG_MS
         val weak = rsrp != null && rsrp <= -108
@@ -442,24 +444,33 @@ class GameBoostController(context: Context) {
         if (lagStreak < 2) return
         val now = System.currentTimeMillis()
         if (now - lastTowerPopup < 3 * 60_000L || Privileged.busy) return
-        if (Privileged.repickBlock(ctx, false, allowGame = true) != null) return
+        if (ready && Privileged.repickBlock(ctx, false, allowGame = true) != null) return
         lastTowerPopup = now
         Privileged.beforeMs = activeMs
         Privileged.beforeRsrp = rsrp
-        notifyTower(activeMs, rsrp)
+        notifyTower(activeMs, rsrp, ready)
     }
 
-    private fun notifyTower(ms: Int?, rsrp: Int?) {
+    private fun notifyTower(ms: Int?, rsrp: Int?, ready: Boolean) {
         if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(NotificationChannel(TOWER_CHANNEL, "Game Boost: switch tower", NotificationManager.IMPORTANCE_HIGH))
         }
-        val send = Intent(ctx, TowerSwitchReceiver::class.java).setAction(TowerSwitchReceiver.ACTION)
-        val pi = PendingIntent.getBroadcast(ctx, 22, send, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val pi = if (ready) {
+            val send = Intent(ctx, TowerSwitchReceiver::class.java).setAction(TowerSwitchReceiver.ACTION)
+            PendingIntent.getBroadcast(ctx, 22, send, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        } else {
+            // Without Shizuku PULSE cannot toggle airplane mode itself: open the phone's own airplane setting.
+            val open = Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            PendingIntent.getActivity(ctx, 23, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
         val game = GameBoost.gameLabel ?: "your game"
         val now = (if (ms != null) "$ms ms" else "no answer") + (if (rsrp != null) ", signal $rsrp dBm" else "")
-        val detail = "Mobile data is lagging ($now). Tap Switch tower: PULSE turns airplane mode on for about 2 seconds, then off, so the phone picks a tower again. " +
+        val detail = "Mobile data is lagging ($now). " + (if (ready)
+            "Tap Switch tower: PULSE turns airplane mode on for about 2 seconds, then off, so the phone picks a tower again. "
+        else
+            "Tap to open the airplane mode setting: turn it on, wait 2 seconds, turn it off so the phone picks a tower again. Start Shizuku in PULSE to do this in one tap. ") +
             "Your connection (and the match) drops for roughly 3 to 8 seconds. The phone chooses the tower, it can be the same one." +
             (GameBoost.hint?.let { "\n$it" } ?: "")
         val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
@@ -472,7 +483,7 @@ class GameBoostController(context: Context) {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
             .setContentIntent(pi)
-            .addAction(0, "Switch tower", pi)
+            .addAction(0, if (ready) "Switch tower" else "Open airplane setting", pi)
             .build()
         try {
             nm.notify(TOWER_NOTIF_ID, n)
@@ -529,7 +540,7 @@ class GameBoostController(context: Context) {
         private const val TOWER_CHANNEL = "gameboost_tower"
         private const val TOWER_NOTIF_ID = 7881
         private const val LAG_MS = 150
-        const val MEASURE_EVERY_S = 15
+        const val MEASURE_EVERY_S = 20
         private const val PROBE_BYTES = 260L
     }
 }
