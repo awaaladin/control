@@ -23,13 +23,25 @@ object Meter {
         while (history.size > 12) history.removeFirst()
     }
 
-    private fun label(rsrp: Int) = when {
-        rsrp >= -85 -> "Strong"
-        rsrp >= -95 -> "Good"
-        rsrp >= -105 -> "Fair"
-        rsrp >= -115 -> "Weak"
-        else -> "Very weak"
+    /** 4 = best .. 0 = worst, from signal STRENGTH (RSRP). */
+    private fun strengthLevel(rsrp: Int) = when {
+        rsrp >= -85 -> 4
+        rsrp >= -95 -> 3
+        rsrp >= -105 -> 2
+        rsrp >= -115 -> 1
+        else -> 0
     }
+
+    /** Same scale from signal QUALITY (RSRQ): a strong signal on a crowded or noisy cell still lags. */
+    private fun qualityLevel(rsrq: Int) = when {
+        rsrq >= -10 -> 4
+        rsrq >= -13 -> 3
+        rsrq >= -15 -> 2
+        rsrq >= -18 -> 1
+        else -> 0
+    }
+
+    private val labels = arrayOf("Very weak", "Weak", "Fair", "Good", "Strong")
 
     @Synchronized
     private fun trend(): String {
@@ -71,13 +83,22 @@ object Meter {
             val line = listOfNotNull("No mobile signal reading", pingTxt).joinToString(" · ")
             return View(0, "No reading", "", "Network: no signal reading", line, listOfNotNull(line, tower).joinToString("\n"))
         }
-        val pct = ((r + 140) * 100 / 70).coerceIn(0, 100)
-        val lb = label(r)
+        val q = Engine.lastRsrq?.takeIf { it in -30..-1 }
+        val sl = strengthLevel(r)
+        val ql = q?.let { qualityLevel(it) } ?: 4
+        val pctStrength = ((r + 140) * 100 / 70).coerceIn(0, 100)
+        val pct = if (q != null) minOf(pctStrength, ((q + 20) * 100 / 17).coerceIn(0, 100)) else pctStrength
+        val lb = labels[minOf(sl, ql)]
+        val why = when {
+            q != null && ql < sl -> "Signal is ${labels[sl].lowercase()} but the channel is noisy or crowded (quality $q dB), so lag is likely"
+            else -> null
+        }
         val tr = trend()
         val title = "Network: $lb · $r dBm" + if (tr != "Steady") " · $tr" else ""
         val line = listOfNotNull(net, tr, pingTxt).joinToString(" · ")
         val detail = listOfNotNull(
-            "$lb signal on $net ($r dBm), ${pct}%",
+            "$lb on $net: strength $r dBm" + (q?.let { ", quality $it dB" } ?: "") + ", ${pct}%",
+            why,
             "Trend: $tr",
             pingTxt,
             tower,

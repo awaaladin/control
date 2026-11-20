@@ -119,6 +119,7 @@ pub fn classify(adapters: &[Adapter], h: &Hints) -> Vec<Link> {
             let medium = match (kind, a.if_type) {
                 (LinkKind::PhoneUsb, _) => "USB",
                 (_, 71) => "Wi-Fi",
+                (_, 6) if a.route_unknown => "Phone network",
                 (_, 6) => "Ethernet",
                 _ => "other",
             };

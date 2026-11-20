@@ -26,6 +26,8 @@ object Engine {
     @Volatile var lastRsrpAt: Long = 0L
     /** "LTE", "5G" ...: shown in the notification meter. */
     @Volatile var lastNetType: String? = null
+    /** Signal quality (dB) of the serving cell; strong signal with poor quality is what makes a game lag. */
+    @Volatile var lastRsrq: Int? = null
     /** The user (or the Stop button in PULSE) ended the engine: it is not restarted until Start. */
     @Volatile var stoppedByUser: Boolean = false
 
