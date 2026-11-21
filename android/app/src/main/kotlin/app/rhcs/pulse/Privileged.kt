@@ -158,6 +158,17 @@ object Privileged {
         false
     }
 
+    /** True while this phone is sharing its connection (hotspot): airplane mode would switch it off. */
+    fun hotspotOn(): Boolean = try {
+        java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces()).any { ni ->
+            val n = ni.name.lowercase()
+            (n.startsWith("ap") || n.startsWith("swlan") || n.startsWith("softap")) && ni.isUp &&
+                ni.inetAddresses.toList().any { it is java.net.Inet4Address }
+        }
+    } catch (e: Exception) {
+        false
+    }
+
     /** Why a tower re-pick must not run right now, or null when it may. */
     fun repickBlock(ctx: Context, auto: Boolean, allowGame: Boolean = false): String? {
         if (state(ctx) != "ready") return "Privileged mode is not ready."
@@ -165,6 +176,7 @@ object Privileged {
         if (!allowGame && (GameBoost.game != null || System.currentTimeMillis() - GameBoost.lastGameSeen < GAME_QUIET_MS)) {
             return "A game is open or was open a moment ago. Re-picking drops ALL connections for 5 to 10 seconds, so it is blocked while gaming."
         }
+        if (hotspotOn()) return "Your hotspot is on. Re-picking turns airplane mode on, which switches the hotspot off and disconnects every device using it. Turn the hotspot off yourself first if you really want to re-pick."
         if (airplaneOn(ctx)) return "Airplane mode is already on."
         val idle = callIdle(ctx)
         if (idle == false) return "A phone call is in progress."
