@@ -86,14 +86,28 @@ class GameBoostController(context: Context) {
     private suspend fun CoroutineScope.runLoop() {
         var current: String? = null
         var lastMeasure = 0L
+        var awaySince = 0L
         fgPkg = null
         lastEventTs = 0L
         try {
             while (isActive) {
                 val pkg = if (GameBoost.hasUsageAccess(ctx)) pollForeground() else null
-                val gamePkg = pkg?.takeIf { isGame(it) }
-                if (gamePkg != null) GameBoost.lastGameSeen = System.currentTimeMillis()
+                var gamePkg = pkg?.takeIf { isGame(it) }
+                if (gamePkg != null) {
+                    GameBoost.lastGameSeen = System.currentTimeMillis()
+                    awaySince = 0L
+                } else if (current != null) {
+                    // Pulling down the notification shade (or a quick app switch) makes the phone report the game as
+                    // paused. Keep the session, and its popup, for a short grace period so the person can tap it.
+                    val t = System.currentTimeMillis()
+                    if (awaySince == 0L) awaySince = t
+                    if (t - awaySince < AWAY_GRACE_MS) {
+                        gamePkg = current
+                        GameBoost.lastGameSeen = t
+                    }
+                }
                 if (gamePkg != current) {
+                    awaySince = 0L
                     if (current != null) endSession()
                     current = gamePkg
                     lastMeasure = 0L
@@ -103,7 +117,7 @@ class GameBoostController(context: Context) {
                     }
                 }
                 val now = System.currentTimeMillis()
-                if (current != null && now - lastMeasure >= MEASURE_EVERY_S * 1000L) {
+                if (current != null && awaySince == 0L && now - lastMeasure >= MEASURE_EVERY_S * 1000L) {
                     lastMeasure = now
                     measureRound()
                 }
@@ -540,6 +554,7 @@ class GameBoostController(context: Context) {
         private const val TOWER_CHANNEL = "gameboost_tower"
         private const val TOWER_NOTIF_ID = 7881
         private const val LAG_MS = 150
+        private const val AWAY_GRACE_MS = 25_000L
         const val MEASURE_EVERY_S = 20
         private const val PROBE_BYTES = 260L
     }
