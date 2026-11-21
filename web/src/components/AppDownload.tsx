@@ -29,6 +29,13 @@ export function AppDownload({ variant }: { variant: 'card' | 'pill' }) {
       <a className="btn btn--accent" href={APK_URL} download="pulse.apk">
         ⬇ Download the app (about 3 MB)
       </a>
+      <span className="muted small">
+        Optional, for one-tap tower switching: also install{' '}
+        <a href="https://github.com/RikkaApps/Shizuku/releases/latest" target="_blank" rel="noreferrer">
+          Shizuku
+        </a>{' '}
+        (a separate free app; Android does not allow it to be bundled inside PULSE).
+      </span>
     </div>
   );
 }
