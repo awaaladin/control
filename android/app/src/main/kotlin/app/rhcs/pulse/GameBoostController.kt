@@ -457,13 +457,6 @@ class GameBoostController(context: Context) {
         lastTowerPopup = now
         Privileged.beforeMs = activeMs
         Privileged.beforeRsrp = rsrp
-        if (ready && GameBoost.option(ctx, "tower_auto", false) && autoAllowed(now)) {
-            // The person turned on autonomous switching: do it without a tap, then tell them.
-            autoSwitches.addLast(now)
-            Privileged.repickFromPopup(ctx)
-            notifyAutoSwitch(activeMs, rsrp)
-            return
-        }
         notifyTower(activeMs, rsrp, ready)
     }
 
@@ -511,35 +504,6 @@ The phone chose the same tower again; it was already the best one it could hear.
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
             .setGroup("pulse_tower")
-            .build()
-        try {
-            nm.notify(TOWER_NOTIF_ID, n)
-        } catch (_: SecurityException) {
-        }
-    }
-
-    private val autoSwitches = ArrayDeque<Long>()
-
-    /** At most 4 automatic switches per hour, so a bad area cannot make the phone flap. */
-    private fun autoAllowed(now: Long): Boolean {
-        while (autoSwitches.isNotEmpty() && now - autoSwitches.first() > 3_600_000L) autoSwitches.removeFirst()
-        return autoSwitches.size < 4
-    }
-
-    private fun notifyAutoSwitch(ms: Int?, rsrp: Int?) {
-        if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
-        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel(TOWER_CHANNEL, "Game Boost: switch tower", NotificationManager.IMPORTANCE_HIGH))
-        }
-        val now = (if (ms != null) "$ms ms" else "no answer") + (if (rsrp != null) ", signal $rsrp dBm" else "")
-        val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("Switched tower automatically")
-            .setContentText("Mobile data was lagging ($now). Airplane mode went on for 2 s and off; the connection returns in a few seconds.")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true)
             .build()
         try {
             nm.notify(TOWER_NOTIF_ID, n)

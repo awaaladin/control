@@ -164,12 +164,6 @@ function PrivSection({ p, gameOpen }: { p: PhonePriv | undefined; gameOpen: bool
               Re-pick tower
             </button>
           )}
-          <Switch checked={!!p.tower_auto} onChange={(on) => phoneSetOption('tower_auto', on)} label="Switch tower by itself when my game lags" />
-          <p className="muted small">
-            Off by default. While a game is open on mobile data and lags for two checks in a row, PULSE turns airplane mode on for 2 seconds and
-            off, with no tap. <strong>Your match drops for about 3 to 8 seconds each time.</strong> At most once every 3 minutes and 4 times an
-            hour; never during a call or while your hotspot is on (airplane mode would switch the hotspot off).
-          </p>
           <Switch checked={p.auto} onChange={(on) => phoneSetOption('priv_auto', on)} label="Re-pick automatically when signal is poor" />
           <p className="muted small">
             Off by default. Only while Game Boost is on, no game is open, you are on mobile data, signal has been at or below -110 dBm for 60

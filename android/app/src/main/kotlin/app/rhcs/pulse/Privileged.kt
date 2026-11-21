@@ -349,7 +349,6 @@ object Privileged {
         o.put("state", st)
         o.put("denied_forever", st == "needs_permission" && deniedForever())
         o.put("auto", autoEnabled(ctx))
-        o.put("tower_auto", GameBoost.option(ctx, "tower_auto", false))
         o.put("busy", busy)
         o.put("last", lastResult ?: JSONObject.NULL)
         o.put("wifi_off_by_us", prefs(ctx).getBoolean("wifi_off_by_us", false))
