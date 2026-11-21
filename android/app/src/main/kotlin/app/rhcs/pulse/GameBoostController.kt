@@ -498,8 +498,7 @@ class GameBoostController(context: Context) {
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(title)
             .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text + if (same) "
-The phone chose the same tower again; it was already the best one it could hear." else ""))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text + if (same) "\nThe phone chose the same tower again; it was already the best one it could hear." else ""))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
