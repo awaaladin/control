@@ -283,6 +283,12 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
                         .is_none()
                         .then(|| "the phone isn't connected over ADB (USB debugging or ADB over Wi-Fi), so its radio can't be read".to_string()),
                 ),
+                // rhcsd runs on this phone: the connection IS this phone, so its own radio readings belong to it.
+                LinkKind::Other if i.on_phone => (
+                    "phone",
+                    i.phone.map(phone_radio),
+                    i.phone.is_none().then(|| "this phone's signal has not been read yet".to_string()),
+                ),
                 LinkKind::Other => ("other", None, Some("rhcs doesn't know which device is behind this connection".to_string())),
             };
             let throughput = match (l.kind, i.router) {
@@ -314,6 +320,7 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
                     m.extend(cell_metrics(radio.as_ref(), "Phone ", Some(phone_note)));
                     m
                 }
+                LinkKind::Other if i.on_phone => cell_metrics(radio.as_ref(), "", None),
                 LinkKind::Other => pc,
             };
             let ping = i.boost.iter().find(|r| r.link.id == l.id).filter(|r| r.stats.sent > 0).map(|r| Ping {
@@ -344,7 +351,7 @@ pub fn build(i: &Inputs) -> Vec<Connection> {
             }
         })
         .collect();
-    if i.on_phone {
+    if i.on_phone && !out.iter().any(|c| c.kind == "phone") {
         if let Some(p) = i.phone {
             out.push(Connection {
                 id: "phone-self".into(),
@@ -425,7 +432,7 @@ async fn get_connections(State(s): State<Shared>) -> Json<Value> {
         phone_model: phone.and_then(|p| p.model.clone()),
         boost: &boost.links,
         boost_at: boost.finished.or(boost.started),
-        on_phone: crate::phone::in_termux(),
+        on_phone: crate::phone::in_termux() || s.cfg.app_mode,
         wlan: &wlan,
         speeds: &speeds,
         bluetooth: &bluetooth,
@@ -460,6 +467,24 @@ mod tests {
             if_index: 4,
             ssid: Some(name.split(" (").next().unwrap().into()),
         }
+    }
+
+    #[test]
+    fn the_phones_own_link_carries_its_radio_readings() {
+        let a = crate::links::Adapter {
+            alias: "This phone's connection".into(),
+            if_type: 6,
+            up: true,
+            addrs: vec!["10.1.2.3".parse().unwrap()],
+            route_unknown: true,
+            ..Default::default()
+        };
+        let links = crate::links::classify(&[a], &crate::links::Hints::default());
+        let p = PhoneStatus { rsrp: Some(-84.0), rsrq: Some(-12.0), ..Default::default() };
+        let list = build(&Inputs { links: &links, phone: Some(&p), phone_model: Some("Y".into()), on_phone: true, ..Default::default() });
+        assert_eq!(list.len(), 1, "no duplicate phone-self entry");
+        assert_eq!(list[0].kind, "phone");
+        assert!(list[0].radio.is_some());
     }
 
     #[test]

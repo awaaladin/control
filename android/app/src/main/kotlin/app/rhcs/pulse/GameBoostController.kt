@@ -476,7 +476,7 @@ class GameBoostController(context: Context) {
         val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle("Lag in $game: switch tower?")
-            .setContentText("Mobile data is lagging ($now). Tap to re-pick the tower.")
+            .setContentText("Mobile data is lagging ($now). " + if (ready) "Tap to re-pick the tower." else "Tap to open the airplane setting.")
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             // Alarm category so this one still shows when PULSE has put Do Not Disturb on for the game.

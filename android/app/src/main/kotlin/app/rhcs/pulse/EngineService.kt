@@ -318,7 +318,9 @@ class EngineService : Service() {
 
     /** Copies assets/pulse-web into filesDir/web, only when the app version changed. */
     private fun prepareWeb() {
-        val version = PackageInfoCompat.getLongVersionCode(packageManager.getPackageInfo(packageName, 0)).toString()
+        // versionCode never changes between our builds, so the install time is part of the stamp: every update re-copies the dashboard.
+        val info = packageManager.getPackageInfo(packageName, 0)
+        val version = "${PackageInfoCompat.getLongVersionCode(info)}-${info.lastUpdateTime}"
         val dest = File(filesDir, "web")
         val marker = File(dest, ".version")
         if (marker.isFile && marker.readText().trim() == version && File(dest, "index.html").isFile) return
