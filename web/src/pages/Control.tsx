@@ -264,11 +264,13 @@ export function ControlPage() {
           <EngineCard />
         </Panel>
 
-        <Panel title="Android app" kicker="Download" className="ctl-app">
-          <AppDownload variant="card" />
-        </Panel>
+        {insideApp() ? null : (
+          <Panel title="Android app" kicker="Download" className="ctl-app">
+            <AppDownload variant="card" />
+          </Panel>
+        )}
 
-        <Panel title="Settings" kicker="stored in this browser" className="ctl-settings">
+        <Panel title="Settings" kicker={insideApp() ? 'stored in this app' : 'stored in this browser'} className="ctl-settings">
           <form
             className="settings-form"
             onSubmit={(e) => {

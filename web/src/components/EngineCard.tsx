@@ -34,7 +34,9 @@ export function EngineCard() {
   const stop = async () => {
     const ok = await confirmAction({
       title: 'Stop the engine?',
-      body: 'PULSE will stop reading your router and devices and this page will disconnect. Nothing is deleted. You can start the engine again from here.',
+      body: inApp
+        ? "PULSE will stop reading this phone's signal, the pull-down meter and Game Boost will stop, and this page will disconnect. Nothing is deleted. You can start the engine again from here."
+        : 'PULSE will stop reading your router and devices and this page will disconnect. Nothing is deleted. You can start the engine again from here.',
       confirmLabel: 'Stop engine',
       danger: true,
     });
