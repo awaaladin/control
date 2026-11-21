@@ -5,6 +5,7 @@ import { useStore } from '../lib/store';
 import { useCanvasSize, useTick } from '../lib/ticker';
 import type { DeviceView } from '../lib/types';
 import { usePointer } from './usePointer';
+import { insideApp } from '../lib/engine';
 
 export type Kind = 'gateway' | 'self' | 'phone' | 'unknown';
 
@@ -20,7 +21,7 @@ export function kindOf(d: DeviceView): Kind {
 
 export const KIND_LABEL: Record<Kind, string> = {
   gateway: 'Gateway',
-  self: 'This PC',
+  self: insideApp() ? 'This phone' : 'This PC',
   phone: 'Phone / tablet',
   unknown: 'Other',
 };

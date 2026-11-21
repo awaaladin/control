@@ -9,6 +9,7 @@ import { confirmAction, toast, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import type { RouterAction } from '../lib/types';
 import { runScan } from './Network';
+import { insideApp } from '../lib/engine';
 
 const NOT_YET = 'Not available yet: rhcsd answers 501 because this action changes router settings and has not been tested on this router.';
 
@@ -224,7 +225,7 @@ export function ControlPage() {
             <input type="range" min={0.5} max={10} step={0.5} value={interval} onChange={(e) => setIntervalV(Number(e.target.value))} aria-valuetext={`${interval} seconds`} />
           </label>
           <div className="row">
-            <span className="muted small">Current: <span className="num">{isNum(settings?.interval_s) ? `${settings!.interval_s} s` : '—'}</span> · LAN scan every <span className="num">{isNum(settings?.scan_interval_s) ? fmtDuration(settings!.scan_interval_s) : '—'}</span></span>
+            <span className="muted small">Current: <span className="num">{isNum(settings?.interval_s) ? `${settings!.interval_s} s` : '—'}</span> · {insideApp() ? 'LAN scan only when you press Scan now' : <>LAN scan every <span className="num">{isNum(settings?.scan_interval_s) ? fmtDuration(settings!.scan_interval_s) : '—'}</span></>}</span>
             <button type="button" className="btn btn--accent" onClick={() => void applyInterval()} disabled={interval === settings?.interval_s}>
               Apply
             </button>

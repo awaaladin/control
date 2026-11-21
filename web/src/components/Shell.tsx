@@ -92,7 +92,9 @@ export function TopBar() {
   const sources = useStore((s) => s.sources);
   const telemetryAt = useStore((s) => s.telemetryAt);
   const now = useNow(1000);
-  const stale = conn === 'live' && isStale(telemetryAt, STALE_MS.telemetry, now);
+  // In the app the data comes from the phone itself (no router), so a live phone reading means live.
+  const phoneLive = insideApp() && sources?.phone?.online === true;
+  const stale = conn === 'live' && !phoneLive && isStale(telemetryAt, STALE_MS.telemetry, now);
 
   const state =
     conn === 'live'

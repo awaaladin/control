@@ -217,7 +217,8 @@ class SignalReporter(private val ctx: Context) {
         if (Build.VERSION.SDK_INT >= 26) {
             o.putIf("rsrp", ss.rsrp, -160, -1)
             o.putIf("rsrq", ss.rsrq, -50, 20)
-            o.putIf("sinr", ss.rssnr, -50, 60)
+            // Some phones (vivo) report exactly 0 when they have no SINR: that is "no reading", not 0 dB.
+            if (ss.rssnr != 0) o.putIf("sinr", ss.rssnr, -50, 60)
             if (Build.VERSION.SDK_INT >= 29) o.putIf("rssi", ss.rssi, -150, -1)
         } else {
             o.putIf("rsrp", ss.dbm, -160, -1)
@@ -240,7 +241,7 @@ class SignalReporter(private val ctx: Context) {
         if (mcc != null && mnc != null) o.put("mcc", mcc).put("mnc", mnc)
         o.putIf("rsrp", ss.ssRsrp, -160, -1)
         o.putIf("rsrq", ss.ssRsrq, -50, 20)
-        o.putIf("sinr", ss.ssSinr, -50, 60)
+        if (ss.ssSinr != 0) o.putIf("sinr", ss.ssSinr, -50, 60)
         return Cell(o, ci.isRegistered, "NR")
     }
 

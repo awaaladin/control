@@ -7,6 +7,7 @@ import { api } from '../lib/rhcs';
 import { confirmAction, toast, useStore } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import type { DeviceView } from '../lib/types';
+import { insideApp } from '../lib/engine';
 
 export async function runScan(): Promise<void> {
   const ok = await confirmAction({
@@ -263,7 +264,9 @@ export function NetworkPage() {
       {devices.length === 0 && groups.length === 0 ? (
         <Panel>
           <Empty title={scan?.running ? 'Scanning…' : 'No devices yet'}>
-            The LAN scanner reports after each sweep (every few minutes by default). Use “Scan now” to run one immediately.
+            {insideApp()
+              ? 'On the phone a scan runs only when you press “Scan now”. It sweeps the network you are on, so use it on Wi-Fi: on mobile data it finds nothing useful and uses data.'
+              : 'The LAN scanner reports after each sweep (every few minutes by default). Use “Scan now” to run one immediately.'}
           </Empty>
         </Panel>
       ) : mode === 'map' ? (

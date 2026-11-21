@@ -32,6 +32,7 @@ import { isStale, STALE_MS, useStore, type WindowKey } from '../lib/store';
 import { useNow } from '../lib/ticker';
 import type { PhoneStatus, Telemetry } from '../lib/types';
 import '../styles/extras.css';
+import { insideApp } from '../lib/engine';
 
 const telemetryStale = () => {
   const s = useStore.getState();
@@ -225,7 +226,7 @@ function ConnectionPicker({ list, selected, onPick }: { list: Connection[]; sele
 function ConnectionsStrip({ list, best, t, p, onPick }: { list: Connection[]; best: string | null; t: Telemetry | null; p: PhoneStatus | null; onPick: (id: string) => void }) {
   if (list.length < 1) return null;
   return (
-    <Panel kicker="Every internet connection of this computer" title="Connections" className="connstrip">
+    <Panel kicker={insideApp() ? 'Every internet connection of this phone' : 'Every internet connection of this computer'} title="Connections" className="connstrip">
       <ul className="connstrip__list">
         {list.map((c) => {
           const r = radioOf(c, t, p, true);
