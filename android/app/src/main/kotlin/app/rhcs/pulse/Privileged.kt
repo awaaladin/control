@@ -44,6 +44,8 @@ object Privileged {
     @Volatile var beforeMs: Int? = null
     @Volatile var beforeRsrp: Int? = null
     @Volatile var repickDoneAt = 0L
+    @Volatile var beforeCell: Long? = null
+    @Volatile var beforePci: Int? = null
 
     private fun prefs(ctx: Context) = GameBoost.prefs(ctx)
 
@@ -258,6 +260,9 @@ object Privileged {
     }
 
     private fun startRepick(app: Context) {
+        beforeCell = Engine.lastCellId
+        beforePci = Engine.lastPci
+        beforeMs = beforeMs ?: GameBoost.cellMs
         bg("repick") {
             prefs(app).edit().putBoolean("airplane_changed", true).commit()
             val fast = run("repick_fast")
@@ -344,6 +349,7 @@ object Privileged {
         o.put("state", st)
         o.put("denied_forever", st == "needs_permission" && deniedForever())
         o.put("auto", autoEnabled(ctx))
+        o.put("tower_auto", GameBoost.option(ctx, "tower_auto", false))
         o.put("busy", busy)
         o.put("last", lastResult ?: JSONObject.NULL)
         o.put("wifi_off_by_us", prefs(ctx).getBoolean("wifi_off_by_us", false))

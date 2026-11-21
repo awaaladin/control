@@ -17,6 +17,7 @@ export interface PhonePriv {
   state: ShizukuState;
   denied_forever: boolean;
   auto: boolean;
+  tower_auto?: boolean;
   busy: boolean;
   last: string | null;
   wifi_off_by_us: boolean;
@@ -114,7 +115,7 @@ export function phoneSetEnabled(on: boolean): void {
   bridge()?.setEnabled(on);
   refreshPhoneBoost();
 }
-export function phoneSetOption(name: 'dnd' | 'lowlat' | 'priv_auto', on: boolean): void {
+export function phoneSetOption(name: 'dnd' | 'lowlat' | 'priv_auto' | 'tower_auto', on: boolean): void {
   bridge()?.setOption(name, on);
   refreshPhoneBoost();
 }

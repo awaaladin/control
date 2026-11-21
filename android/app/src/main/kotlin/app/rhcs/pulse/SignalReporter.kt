@@ -135,6 +135,8 @@ class SignalReporter(private val ctx: Context) {
                 Engine.lastRsrp = if (body.has("rsrp")) body.optInt("rsrp") else null
                 Engine.lastRsrpAt = System.currentTimeMillis()
                 Engine.lastRsrq = if (body.has("rsrq")) body.optInt("rsrq") else null
+                Engine.lastCellId = if (body.has("cell_id")) body.optLong("cell_id") else null
+                Engine.lastPci = if (body.has("pci")) body.optInt("pci") else null
                 Engine.lastNetType = body.optString("network_type").takeIf { it.isNotBlank() }
                 val r = Engine.call(ctx, "POST", "/api/phone/push", body.toString())
                 if (r != null && r.first !in 200..299) {

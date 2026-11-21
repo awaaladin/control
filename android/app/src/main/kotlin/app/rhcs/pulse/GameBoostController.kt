@@ -106,6 +106,7 @@ class GameBoostController(context: Context) {
                         GameBoost.lastGameSeen = t
                     }
                 }
+                repickFollowUp()
                 if (gamePkg != current) {
                     awaySince = 0L
                     if (current != null) endSession()
@@ -167,6 +168,7 @@ class GameBoostController(context: Context) {
         notified = false
         lagStreak = 0
         registerCallbacks()
+        shizukuNudge()
         if (GameBoost.option(ctx, "dnd")) GameBoost.dndActive = GameBoost.applyDnd(ctx)
     }
 
@@ -448,13 +450,6 @@ class GameBoostController(context: Context) {
             return
         }
         lagStreak++
-        // Right after a re-pick, report whether it helped.
-        if (Privileged.repickDoneAt > 0L && System.currentTimeMillis() - Privileged.repickDoneAt > 6_000L) {
-            val b = Privileged.beforeMs
-            Privileged.lastResult = "After switching tower: ${activeMs?.let { "$it ms" } ?: "no answer"} (before: ${b?.let { "$it ms" } ?: "no answer"})" +
-                (rsrp?.let { ", signal $it dBm" } ?: "") + ". The phone picks the tower; it can be the same one."
-            Privileged.repickDoneAt = 0L
-        }
         if (lagStreak < 2) return
         val now = System.currentTimeMillis()
         if (now - lastTowerPopup < 3 * 60_000L || Privileged.busy) return
@@ -462,7 +457,123 @@ class GameBoostController(context: Context) {
         lastTowerPopup = now
         Privileged.beforeMs = activeMs
         Privileged.beforeRsrp = rsrp
+        if (ready && GameBoost.option(ctx, "tower_auto", false) && autoAllowed(now)) {
+            // The person turned on autonomous switching: do it without a tap, then tell them.
+            autoSwitches.addLast(now)
+            Privileged.repickFromPopup(ctx)
+            notifyAutoSwitch(activeMs, rsrp)
+            return
+        }
         notifyTower(activeMs, rsrp, ready)
+    }
+
+    /**
+     * After any tower switch: once the phone has registered and read its cell again, say on a notification whether
+     * it landed on the same tower or a different one, with the signal and delay before and after.
+     */
+    private fun repickFollowUp() {
+        val done = Privileged.repickDoneAt
+        if (done == 0L) return
+        val now = System.currentTimeMillis()
+        if (now - done > 90_000L) {
+            Privileged.repickDoneAt = 0L
+            return
+        }
+        val cell = Engine.lastCellId
+        val pci = Engine.lastPci
+        if (now - done < 6_000L || Engine.lastRsrpAt < done + 4_000L || (cell == null && pci == null)) return
+        Privileged.repickDoneAt = 0L
+        val bc = Privileged.beforeCell
+        val bp = Privileged.beforePci
+        val same = (bc == null || cell == null || bc == cell) && (bp == null || pci == null || bp == pci)
+        val rsrp = Engine.lastRsrp
+        val ms = GameBoost.cellMs
+        val before = Privileged.beforeMs
+        val sig = rsrp?.let { "signal $it dBm" }
+        val ping = if (ms != null || before != null) "delay ${before?.let { "$it ms" } ?: "-"} before, ${ms?.let { "$it ms" } ?: "measuring"} now" else null
+        val title = if (same) "Switched: landed on the SAME tower" else "Switched: landed on a DIFFERENT tower"
+        val tower = "tower ${cell ?: "?"}, PCI ${pci ?: "?"}"
+        val was = if (!same) "was ${bc ?: "?"}, PCI ${bp ?: "?"}" else null
+        val text = listOfNotNull(tower, was, sig, ping).joinToString(" · ")
+        Privileged.lastResult = "$title ($text)"
+        if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(NotificationChannel(TOWER_CHANNEL, "Game Boost: switch tower", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text + if (same) "
+The phone chose the same tower again; it was already the best one it could hear." else ""))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .setGroup("pulse_tower")
+            .build()
+        try {
+            nm.notify(TOWER_NOTIF_ID, n)
+        } catch (_: SecurityException) {
+        }
+    }
+
+    private val autoSwitches = ArrayDeque<Long>()
+
+    /** At most 4 automatic switches per hour, so a bad area cannot make the phone flap. */
+    private fun autoAllowed(now: Long): Boolean {
+        while (autoSwitches.isNotEmpty() && now - autoSwitches.first() > 3_600_000L) autoSwitches.removeFirst()
+        return autoSwitches.size < 4
+    }
+
+    private fun notifyAutoSwitch(ms: Int?, rsrp: Int?) {
+        if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(NotificationChannel(TOWER_CHANNEL, "Game Boost: switch tower", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val now = (if (ms != null) "$ms ms" else "no answer") + (if (rsrp != null) ", signal $rsrp dBm" else "")
+        val n = NotificationCompat.Builder(ctx, TOWER_CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle("Switched tower automatically")
+            .setContentText("Mobile data was lagging ($now). Airplane mode went on for 2 s and off; the connection returns in a few seconds.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .build()
+        try {
+            nm.notify(TOWER_NOTIF_ID, n)
+        } catch (_: SecurityException) {
+        }
+    }
+
+    private var lastShizukuNudge = 0L
+
+    /** Shizuku is installed but not running: say so once in a while, with a button that opens it. */
+    private fun shizukuNudge() {
+        if (Privileged.state(ctx) != "not_running") return
+        val now = System.currentTimeMillis()
+        if (now - lastShizukuNudge < 6 * 3_600_000L) return
+        if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
+        val launch = ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api") ?: return
+        lastShizukuNudge = now
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Game Boost suggestions", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val pi = PendingIntent.getActivity(ctx, 24, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(ctx, CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle("Tower switching is off: Shizuku is not running")
+            .setContentText("Shizuku stops when the phone restarts. Start it again (from a computer over USB, or with Wireless debugging).")
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .addAction(0, "Open Shizuku", pi)
+            .build()
+        try {
+            nm.notify(NOTIF_ID + 5, n)
+        } catch (_: SecurityException) {
+        }
     }
 
     private fun notifyTower(ms: Int?, rsrp: Int?, ready: Boolean) {
@@ -497,7 +608,9 @@ class GameBoostController(context: Context) {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true)
             .setContentIntent(pi)
-            .addAction(0, if (ready) "Switch tower" else "Open airplane setting", pi)
+            .addAction(android.R.drawable.ic_popup_sync, if (ready) "SWITCH TOWER" else "Open airplane setting", pi)
+            // Its own group, so Android does not stack it under the meter notification and hide the button.
+            .setGroup("pulse_tower")
             .build()
         try {
             nm.notify(TOWER_NOTIF_ID, n)

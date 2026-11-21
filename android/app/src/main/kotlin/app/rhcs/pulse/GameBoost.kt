@@ -32,6 +32,7 @@ object GameBoost {
         when (name) {
             "dnd", "lowlat" -> prefs(ctx).edit().putBoolean("opt_$name", on).apply()
             "priv_auto" -> Privileged.setAuto(ctx, on)
+            "tower_auto" -> prefs(ctx).edit().putBoolean("opt_tower_auto", on).apply()
         }
     }
 

@@ -28,6 +28,9 @@ object Engine {
     @Volatile var lastNetType: String? = null
     /** Signal quality (dB) of the serving cell; strong signal with poor quality is what makes a game lag. */
     @Volatile var lastRsrq: Int? = null
+    /** The serving cell as last read: used to tell whether a tower switch landed on the same tower. */
+    @Volatile var lastCellId: Long? = null
+    @Volatile var lastPci: Int? = null
     /** The user (or the Stop button in PULSE) ended the engine: it is not restarted until Start. */
     @Volatile var stoppedByUser: Boolean = false
 
